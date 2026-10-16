@@ -1,6 +1,6 @@
 # HealthHyr v2 build plan (approved)
 
-Approved by the owner on 2026-10-16 after three review rounds. The product-shape adjustment (seekers on a mobile app and a minimal website, employers on the web) was approved the same day, together with the decisions in section 15. Sections marked "(adjusted)" carry that change. This file is the source of truth if a session resets. Project rules are in `CLAUDE.md`; the palette is in `docs/COLORS.md`. If this file and a later owner instruction disagree, the later instruction wins and this file gets updated in the same commit.
+Approved by the owner on 2026-10-16 after three review rounds. The product-shape adjustment (seekers on a mobile app and a minimal website, employers on the web) was approved the same day, together with the decisions in section 15. Sections marked "(adjusted)" carry that change. This file is the source of truth if a session resets. Project rules are in `CLAUDE.md`; the palette is in `docs/COLORS.md`; the threat model and pre-launch security checklist are in `docs/SECURITY.md`; the folder responsibilities, data flow and rules for adding code are in `docs/ARCHITECTURE.md`. If this file and a later owner instruction disagree, the later instruction wins and this file gets updated in the same commit.
 
 **The database SQL lives in `supabase/migrations/0001_schema.sql`.** It is the executable source of truth, and tests keep TypeScript enums and constants in sync with it. Section 5 keeps the design notes.
 
@@ -64,10 +64,12 @@ Fixed infrastructure is about $40-55/month plus the store fees, roughly 19-26 pa
 
 ## 3. Folder structure
 
+`docs/ARCHITECTURE.md` explains what each folder is responsible for, how data flows, naming conventions and the rules for adding code. This is the layout, including what is still planned.
+
 ```
 healthhyr-v2/
 ├─ CLAUDE.md, .gitignore, .gitattributes, .env.example files only
-├─ docs/                 COLORS.md, PLAN.md, DEVICE-CHECKLIST.md (new, step 24)
+├─ docs/                 COLORS.md, PLAN.md, SECURITY.md, ARCHITECTURE.md, DEVICE-CHECKLIST.md (new, step 24)
 ├─ package.json          npm workspaces, shared scripts (test, lint, typecheck, db:*)
 ├─ tests/                repo hygiene tests (no committed secrets, .env ignored); support/mailpit.ts (reads emailed codes from the local mail catcher)
 ├─ packages/shared/src/
@@ -76,16 +78,17 @@ healthhyr-v2/
 │  ├─ constants.ts       prices, 30 days, limits, default company name, contact email
 │  ├─ copy.ts            approved user-facing copy that must not drift (visibility switch, pricing disclaimers)
 │  ├─ legal/             terms.md, privacy.md (frontmatter status: draft|final), Node only
-│  └─ schemas/           zod: auth (step 8), job, application, profile, message, contact (used by web, API and mobile)
+│  └─ schemas/           zod: auth (step 8), company (step 9), job, application, profile, message, contact (used by web, API and mobile)
 ├─ apps/web/             Next.js (App Router) + Tailwind
 │  └─ src/
 │     ├─ app/(public)/   page.tsx (Home), jobs/page.tsx, jobs/[slug]/page.tsx,
-│     │                  companies/[slug]/page.tsx, pricing, for-employers, about, contact, terms, privacy, delete-account
+│     │                  companies/[slug]/page.tsx (step 9), pricing, for-employers, about, contact, terms, privacy, delete-account
 │     ├─ app/(auth)/     (step 8) sign-in, sign-up, forgot-password (noindex)
 │     ├─ app/(employer)/ dashboard, jobs, applicants, messages, company (client-side, noindex)
 │     ├─ app/(seeker)/   (adjusted) profile, applications (minimal seeker site, noindex)
 │     ├─ app/(admin)/    (step 8) admin (noindex)
 │     ├─ app/sitemap.ts, robots.ts, layout.tsx
+│     ├─ (step 10b) the request interceptor that sets the security headers and the per-request nonce
 │     ├─ components/ui/  base components; components/auth/ and components/account/ (step 8); components/ feature components
 │     └─ lib/            public-env.ts (the only place the site reads the environment), api/client.ts (the only place it calls fetch),
 │                        auth/ (Supabase adapter, state machine, guards, redirects), seo/jobPostingJsonLd.ts, seo/canonical.ts
@@ -106,12 +109,12 @@ healthhyr-v2/
 │  │  ├─ server.ts       entry point: load config, wire, listen
 │  │  ├─ auth/           verifyToken.ts (JWKS, asymmetric algorithms only)
 │  │  ├─ middleware/     requestId, auth (token, then role from the database), requireRole, errorHandler, security (CORS, per-IP and per-user rate limits)
-│  │  ├─ lib/            userClient.ts (per-request, RLS applies), anonClient.ts (public reads, step 11), serviceClient.ts (bypasses RLS, server-only)
+│  │  ├─ lib/            userClient.ts (per-request, RLS applies), anonClient.ts (public reads, step 9), serviceClient.ts (bypasses RLS, server-only)
 │  │  ├─ routes/         paths.ts (API_V1, webhook path), stripeWebhook.ts (reserved); v1/ (me, then public/, seeker/, employer/, admin/ per section 6.1)
 │  │  └─ services/       server-only operations, the only code allowed to use the service client: stripe, checkout, publish, mailer, push, accountDeletion, notifications, jobs (expire, reconcile)
 │  └─ tests/             supertest suites, boot test, service-role scanner, integration/ (real Supabase)
 └─ supabase/
-   ├─ config.toml        local stack: database, auth and the mail catcher (Data API and storage are turned on when a step needs them)
+   ├─ config.toml        local stack: database, auth and the mail catcher (the Data API is turned on in step 9, storage in step 18)
    ├─ templates/         confirmation.html and recovery.html: the emailed 6-digit code
    ├─ migrations/        0001_schema.sql (executable source of truth); later migrations listed in section 5.5
    └─ tests/
@@ -229,7 +232,7 @@ Account deletion needs no schema change. Deleting the auth user cascades through
 **Which Supabase client (the central rule).**
 
 - **User-initiated reads and writes use `req.auth.db`**: a per-request Supabase client built with the anon key and the caller's own JWT (`src/lib/userClient.ts`). Postgres runs the query as that user, so row-level security and the column privileges apply. This is the default for every route that serves a signed-in person.
-- **Public reads (no sign-in) use an anon-key client** (`src/lib/anonClient.ts`, added in step 11 with the first public route), so the anon role's row-level security decides what is visible (published, unexpired jobs of listed employers only).
+- **Public reads (no sign-in) use an anon-key client** (`src/lib/anonClient.ts`, added in step 9 with the public company route), so the anon role's row-level security decides what is visible (listed employers' pages now, published unexpired jobs from step 11).
 - **The service-role client (`src/lib/serviceClient.ts`) bypasses RLS** and is for server-only operations that no user performs directly: Stripe webhooks, `publish_job` and the other server-only SQL functions, expiry and reconcile jobs, and audited admin actions. That code lives in `src/services/`.
 - **Any endpoint that needs the service client checks ownership in code**, because the database will not.
 - **A test enforces it.** `apps/api/tests/service-role-scan.test.ts` scans the API source and fails if a route, middleware or `app.ts` imports the service-role client without a `// service-role-allowed: <reason>` comment (the reason is required). It also fails if the service-role key is named outside `env.ts`, `server.ts` and `lib/serviceClient.ts`, if `process.env` is read outside `env.ts` and `server.ts`, or if the Stripe secret key is named outside them.
@@ -269,8 +272,10 @@ Nothing existing changes except the version prefix. These are new routes. "Clien
 
 | Group | Route | Who | Client | Needed by | Step |
 |---|---|---|---|---|---|
+| Employer | `GET`, `PUT /api/v1/employer/company` (company profile; `is_listed` and `slug` are never accepted from the client) | employer | user | web | 9 |
+| Public | `GET /api/v1/public/companies/:slug` (404 until the name is changed from the default) | anyone | anon | web, app | 9 |
 | Public | `GET /api/v1/public/jobs` (search, filters, cursor paging) | anyone | anon | web SEO pages, app | 11 |
-| Public | `GET /api/v1/public/jobs/:id`, `GET /api/v1/public/companies/:slug` | anyone | anon | web, app | 11 |
+| Public | `GET /api/v1/public/jobs/:id` | anyone | anon | web, app | 11 |
 | Public | `GET /api/v1/public/app-config` (minimum supported app version, notice) | the app | none | app force-update | 24 |
 | Seeker | `GET`, `PUT /api/v1/seeker/profile` (includes the visibility switch) | seeker | user | web, app | 18 |
 | Seeker | `GET`, `PUT /api/v1/seeker/private` (phone, zip) | seeker | user | web, app | 18 |
@@ -283,7 +288,7 @@ Nothing existing changes except the version prefix. These are new routes. "Clien
 | Seeker | `POST`, `DELETE /api/v1/me/push-tokens` | seeker | user | app | 30 |
 | Seeker | `POST /api/v1/messages/:id/report`, `PUT`, `DELETE /api/v1/me/blocks/:userId` | seeker | user | app (store rules) | 29 |
 | Seeker | `DELETE /api/v1/me` (account deletion; needs the password again) | seeker | **service** | app (store rules), web page | 31 |
-| Employer | company profile, jobs create, edit, close, reopen; checkout, cancel checkout | employer | user / **service** | web | 9 to 14 |
+| Employer | jobs create, edit, close, reopen; checkout, cancel checkout | employer | user / **service** | web | 10 to 14 |
 | Employer | applicants list, set status (five statuses), resume download link | employer | user / **service** | web | 19 |
 | Admin | moderation, contact inbox, needs-review payments, audited reads | admin | **service** | web | 23 |
 
@@ -355,7 +360,7 @@ How the website signs people in, and what it never does.
 - **Sign-up** offers only "seeker" and "employer". A `?role=` link preselects one of those two and nothing else. The shared zod schema, the service and the form all refuse any other value, and the database signup trigger turns anything but `employer` into `seeker` and never creates an admin (proved against real Supabase). Admin is created only with the service role.
 - **Email codes.** Sign-up confirmation and password reset use a 6-digit code emailed by Supabase (valid 15 minutes), not links. Reset verifies the code, then sets the new password. A new code can be requested after a 30 second wait. Messages are fixed friendly text: a wrong password and an unknown address look the same, password reset says the same thing for every address, and sign-up never says "already registered".
 - **Never in the page or the logs.** Passwords live only in the password field and go straight to Supabase over HTTPS. They are never put in text, URLs, logs or sent to the HealthHyr API. Nothing calls `console`.
-- **Known gap, for a later hardening step:** the Supabase session sits in the browser's local storage (the library default), so a script injected into the site could read it. The site sets no Content-Security-Policy yet. Recommended before launch 1: a strict CSP and security headers on the web app (step 36 at the latest, earlier if possible).
+- **Known gap, closed in step 10b:** the Supabase session sits in the browser's local storage (the library default), so a script injected into the site could read it. The site sets no security headers or Content-Security-Policy yet. Step 10b adds them as its own commit, before the first public route (section 11 and `docs/SECURITY.md`).
 
 ## 7. Mobile app design (adjusted)
 
@@ -410,13 +415,39 @@ The same rules as the web (section 4.1) plus touch: roles, labels and states on 
 
 ## 8. SEO
 
-- JobPosting JSON-LD: `datePosted = published_at`, `validThrough = expires_at`, `hiringOrganization`, `jobLocation`, `baseSalary` when pay is set. No "verified" claims.
+Built across steps 9, 11, 12 and 22, and checked again in step 36. The security-side checklist is in `docs/SECURITY.md`; the rules here are the search-side checklist. "Tests" are written in the step that builds the item.
+
+### 8.1 Rules that already exist
+
+- JobPosting JSON-LD: `datePosted = published_at`, `validThrough = expires_at`, `hiringOrganization`, `jobLocation`, `baseSalary` when pay is set. **No "verified" or "background checked" claims in structured data or page text.**
 - Expired or closed jobs: 200 with `noindex`, a "no longer accepting applications" notice, no JSON-LD, and removal from the sitemap.
 - Canonical URLs: `/jobs/{slug}-{id}` and `/companies/{slug}`, with a redirect from a wrong slug. Filtered search URLs canonicalize to `/jobs`.
 - Sitemap: published, non-expired jobs, listed companies, indexable static pages (Terms and Privacy only once final).
 - robots: disallow `/dashboard`, `/messages`, `/api`. Seeker profiles have no public pages. The sign-in, sign-up, forgot-password and signed-in pages already carry `noindex` (step 8).
 - Revalidate affected pages when a job is published, expires, closes or reopens.
 - **(adjusted)** A job page shows an Apply button for seekers on the web. Once the app is published, it also shows store links; until then, no store badge or "get the app" claim appears.
+
+### 8.2 Checklist
+
+| Item | What it means here | Step | Tests |
+|---|---|---|---|
+| **Per-page title and description** | A unique `<title>` (about 60 characters) and meta description (about 155) on every public page, built from real data with a fixed pattern (for example "{Job title} at {Company} in {City}, {State} | HealthHyr"). No empty or duplicate titles. | 9 (company), 11, 12, 22 | A test renders each public route's metadata, fails on empty, missing or over-long values, and fails if two sample routes would produce the same title |
+| **Canonical URLs** | One canonical per page, absolute URL, pointing at the clean path; filtered and paged search canonicalize as above; wrong slug redirects. | 11, 12 | Canonical and redirect tests |
+| **Open Graph and Twitter cards** | `og:title`, `og:description`, `og:url`, `og:type`, `og:site_name`, `og:image` and `twitter:card` (summary or large image) on every public page. The image is a plain brand image or a generated card from real fields, never a fake logo or screenshot. | 12, 22 | Metadata test checks the tags and that the image URL is absolute and exists |
+| **JSON-LD: JobPosting** | As in 8.1, with only fields we actually have; omitted when a field is missing, never invented. | 12 | Field tests; absent on expired and closed jobs |
+| **JSON-LD: Organization** | On company pages and the home page: name, URL, logo only if the employer uploaded one, `sameAs` only if supplied. Never ratings, review counts, awards or verification. | 9 (company), 12 | Field tests; fails if a banned property appears |
+| **JSON-LD: BreadcrumbList** | Home → Jobs → job, and Home → Companies → company, matching the visible breadcrumb. | 12 | Structure and URL tests |
+| **JSON-LD safety** | Serialized with `<` escaped so text from users cannot close the script tag; rendered only through one helper that carries the CSP nonce (step 10b). | 12 | Escaping test with hostile text |
+| **No "verified" claims** | Banned phrases scanned across web copy, metadata, structured data, sitemap and later app and store text. | 12 and 36 | Banned-phrase scan (full scan at 36, earlier scans added as pages appear) |
+| **`noindex` for expired jobs and private pages** | Expired or closed jobs, sign-in, sign-up, reset, dashboards, seeker pages, admin, drafts of Terms and Privacy, and any page without real content (such as a company page still on the default name, which is a 404 anyway). | 8 (done), 9, 11, 12, 22 | Each page type tested for the right robots meta and status |
+| **Sitemap and robots** | `sitemap.ts` lists only indexable URLs with real `lastmod` dates; split by type if it grows past 50,000 URLs. `robots.ts` points to the sitemap and disallows private paths. | 12 | Sitemap content tests (no expired, no unlisted, no drafts); robots test |
+| **Images** | `next/image` with explicit width and height, modern formats, lazy loading below the fold, descriptive `alt` text for content images and empty `alt` for decoration. No layout shift from images. | 9, 22 | Component tests for alt text and dimensions; a source rule against raw `<img>` in `apps/web/src` |
+| **Fonts** | Manrope and DM Sans through `next/font` (self-hosted, no render-blocking request), only the weights used, `display: swap`, size-adjusted fallback. | 3 (done), 36 | Existing font test; a check that no other font file or request is added |
+| **Core Web Vitals** | Targets on a mid-range phone and a throttled connection: LCP under 2.5 s, INP under 200 ms, CLS under 0.1. Public pages are server-rendered, ship little client JavaScript, and avoid layout shift (reserved space, skeletons). Measure with Lighthouse in CI or by hand and a field check after launch. | 11, 12, 36 | Lighthouse or equivalent run on the main public pages with budgets (new tool, ask the owner first) |
+| **Rendering and the CSP** | A per-request nonce (step 10b) can turn static pages into per-request renders. Step 10b measures this on the public pages and picks the approach (see `docs/SECURITY.md`) so SEO pages stay fast and cacheable. | 10b, 11 | Header tests plus a cache and speed check |
+| **Internal links and breadcrumbs** | Real `<a href>` links between jobs, companies and search; no links that need JavaScript to exist; a visible breadcrumb matching the JSON-LD. | 11, 12 | Link tests on rendered pages |
+| **Search Console and Bing Webmaster Tools** | After launch: verify the domain by DNS, submit the sitemap, watch coverage, structured-data and Core Web Vitals reports, and fix errors. Owner action; no code needed except the sitemap. | After launch 1 | None (manual) |
+| **Not indexable on purpose** | Seeker profiles, messages, applications, anything behind sign-in. | 8 (done), 19, 20 | `noindex` tests per area |
 
 ## 9. Approved copy and page content
 
@@ -489,7 +520,7 @@ No ads, no tracking across other apps, no precise location, no contacts access.
 
 ## 11. Build steps (one commit each, tests passing first) (adjusted)
 
-Steps 0 to 8 are done. The rest is reordered into three phases: the web employer flow and public SEO pages first, then the seeker app, then the Pro directory search. Seeker features on the web (minimal) are in phase A2 because employers need applicants to manage and the public pages need an Apply button.
+Steps 0 to 8 are done. The rest is reordered into three phases: the web employer flow and public SEO pages first, then the seeker app, then the Pro directory search. Seeker features on the web (minimal) are in phase A2 because employers need applicants to manage and the public pages need an Apply button. **Step 10b (security headers and a Content-Security-Policy) is its own commit and lands before the first public route in step 11.** It keeps the number 10b so steps 11 to 36 keep theirs.
 
 | # | Commit | Tests | Status |
 |---|---|---|---|
@@ -502,23 +533,24 @@ Steps 0 to 8 are done. The rest is reordered into three phases: the web employer
 | 6 | Migration `0001_schema.sql`, local Supabase, RLS test suite, mutation runner | 158 RLS tests against real Supabase; 16 mutations proven caught | done |
 | 7 | API skeleton: env validation, JWT auth, `requireRole`, errors, rate limit, helmet, CORS, reserved webhook route, client design rule | 113 API tests (supertest, boot, scanner) and 9 against real Supabase tokens | done |
 | **Phase A1: web, employer flow, public SEO pages, payments** | | | |
-| 8 | **Move the API to `/api/v1` and update commit 7's tests**, add the per-user rate limit. Web auth: sign in and up (employer and seeker), emailed codes, password reset, role routing from the API, protected layouts. (The anon client moved to step 11, where the first public route needs it.) | Every existing API test passes on the new paths; `/api/me` is 404; the webhook path is unchanged; role comes from the profile, never the client; each web flow, role routing and the signed-out view; 12 web flows against real Supabase Auth, mail catcher and the real API app | done |
-| 9 | Turn on the Supabase Data API locally; employer company profile (API and UI) and public company page | 404 until renamed, stable slug, RLS applies through the API end to end | |
+| 8 | **Move the API to `/api/v1` and update commit 7's tests**, add the per-user rate limit. Web auth: sign in and up (employer and seeker), emailed codes, password reset, role routing from the API, protected layouts. | Every existing API test passes on the new paths; `/api/me` is 404; the webhook path is unchanged; role comes from the profile, never the client; each web flow, role routing and the signed-out view; 12 web flows against real Supabase Auth, mail catcher and the real API app | done |
+| 9 | Turn on the Supabase Data API locally (PostgREST image, about 6.5 MB compressed). Add the anon client. Employer company profile (`GET`, `PUT /api/v1/employer/company`, form in the employer area) and the public company route and page (`GET /api/v1/public/companies/:slug`, `/companies/[slug]`, `noindex` until step 12) | 404 until renamed from the default, slug stable after later renames; an employer edits only their own profile (RLS plus an ownership check in code) and a stranger, another employer and anon are refused; `is_listed` and `slug` never accepted from the client; **end-to-end test that a per-request client with the user's token has RLS applied, against the real Data API**; component tests for the form and the public page | |
 | 10 | Jobs: draft CRUD, employer dashboard, close and reopen | Reopen rules, employers cannot set status or dates | |
-| 11 | `0002_job_search`; anon client; public jobs API; search and detail pages (list left, detail right) | Expired, unpublished and unlisted jobs never returned; search and filter correctness | |
-| 12 | SEO: JSON-LD, canonical, sitemap, robots | JSON-LD fields, expired noindex | |
+| **10b** | **Security headers and a nonce-based Content-Security-Policy for the web app**, as its own commit before the first public job route: HSTS, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, `frame-ancestors`, and a per-request nonce. Includes measuring the effect of per-request nonces on the cacheability of public pages and choosing the approach (`docs/SECURITY.md`). CI workflow, `npm audit` and Dependabot are proposed here, with the owner's approval first | Headers present on pages and error pages; nonce changes per request and is on every script; no `unsafe-inline` or `unsafe-eval` in production; source rule against `dangerouslySetInnerHTML` and `innerHTML`; sign-in still works under the policy (real browser check in report-only first) | |
+| 11 | `0002_job_search`; public jobs API; search and detail pages (list left, detail right) | Expired, unpublished and unlisted jobs never returned; search and filter correctness | |
+| 12 | SEO: JSON-LD, canonical, sitemap, robots, Open Graph and Twitter cards (section 8.2) | JSON-LD fields, expired noindex, metadata tests | |
 | 13 | Checkout endpoint with `start_checkout` precheck (Stripe SDK) | Unlisted employer refused, missing fields listed, wrong status refused, one open payment per job, server price | |
 | 14 | Cancel checkout, edit lock while `pending_payment`, session expiry handling | Cancel returns the job to draft, edits blocked while pending and allowed after cancel, cancel refused when paid | |
 | 15 | Stripe webhook handler, `publish_job`, expiry job, page revalidation | Webhook tests (section 12) | |
 | 16 | Email service (Zoho SMTP) and alert retry job | Stub transport, header sanitizing, retry of unsent alerts | |
 | 17 | Permanent-failure path, reconcile job, live-key gate (legal drafts) | `needs_review` and refund path, retry cap, gate tests | |
 | **Phase A2: applicants, seekers on the web, public pages, admin** | | | |
-| 18 | Seeker API: profile, private details, experience, certifications, languages, visibility switch, resume upload (turns on local Storage) | Default off, opt-in stamp, owner-only contact details, upload type and size limits, stranger refused | |
+| 18 | Seeker API: profile, private details, experience, certifications, languages, visibility switch, resume upload (turns on local Storage) | Default off, opt-in stamp, owner-only contact details, upload type (by content) and size limits, server-side renaming, stranger refused | |
 | 19 | Applications API (apply with Easy Apply, my applications, withdraw) and employer applicant review (five statuses, resume link) | One application per job, no applying to expired jobs, withdrawal clears data and deletes the stored resume, status rules | |
 | 20 | Seekers on the web, minimal: sign in, profile editor, Apply on job pages, My applications | Component tests, accessibility, employer redirected from seeker pages | |
 | 21 | Messages and notifications (API, employer web UI) | `can_message` rules, read-once | |
-| 22 | Pages: Home, For Employers, About, Contact (API route, `contact_messages`, support email), Terms and Privacy (final text supplied by the owner before this step), /pricing (Pro "Coming soon"), `/delete-account` page | No sample listings, empty states, rate limit and honeypot, prices from constants, no checkout control on Pro, disclaimer, legal documents marked final | |
-| 23 | Admin: moderation, contact inbox, `needs_review` payments with retry and refund | Every action writes an audit row, non-admins blocked | |
+| 22 | Pages: Home, For Employers, About, Contact (API route, `contact_messages`, support email), Terms and Privacy (final text supplied by the owner before this step), /pricing (Pro "Coming soon"), `/delete-account` page, `/.well-known/security.txt` | No sample listings, empty states, rate limit and honeypot, prices from constants, no checkout control on Pro, disclaimer, legal documents marked final | |
+| 23 | Admin: moderation, contact inbox, `needs_review` payments with retry and refund; two-factor required for admins | Every action writes an audit row, non-admins blocked, admin area refuses a session without the second factor | |
 | **Phase B: seeker mobile app** | | | |
 | 24 | Expo app scaffold: Metro with the workspace, `native.ts` theme, fonts, native base components, Jest, style guard, `app-config` route, `docs/DEVICE-CHECKLIST.md`. Needs the Play account type and the bundle id confirmed first | Component tests, theme parity, source guard, accessibility rules | |
 | 25 | Mobile auth: sign in and up with emailed code, chunked secure storage, refresh, role gate, employer message | Storage adapter, role gate, refresh and retry, no token in logs | |
@@ -533,9 +565,9 @@ Steps 0 to 8 are done. The rest is reordered into three phases: the web employer
 | 33 | Hiring Pro guard and launch notification tool (in-app and push to opted-in seekers) | No subscribe route before launch, announce idempotent and opted-in only | |
 | 34 | Hiring Pro billing: Stripe subscription, webhook events, 30-postings-per-period allowance enforced on the server, `subscriptions` writes | Allowance limits enforced server-side, lapse handling, webhook idempotency | |
 | 35 | Directory search for employers (web): filters, column allowlist, `invitations` (invite to apply), invitation shown to seekers on web and app | No contact fields ever returned, only opted-in seekers of Pro employers, RLS and mutation tests | |
-| 36 | Hardening: accessibility on web and mobile, banned-phrase scan across web, app and store copy, performance; web security headers and a Content-Security-Policy (section 6.2) | Full suite | |
+| 36 | Hardening: accessibility on web and mobile, banned-phrase scan across web, app and store copy, performance and Core Web Vitals, the OWASP Top 10 review written into `docs/SECURITY.md` | Full suite | |
 
-Old to new step numbers: old 9 split into new 9 (Data API, company page) and 18 (seeker profile); old 10 to 14 became 9 to 12 and 13; old 15 to 18 became 14 to 17; old 19 and 20 became 19; old 21 is 21; old 22 to 25 became 22; old 26 is 33; old 27 is 23; old 28 is 36.
+Old to new step numbers: old 9 split into new 9 (Data API, company page) and 18 (seeker profile); old 10 to 14 became 9 to 12 and 13; old 15 to 18 became 14 to 17; old 19 and 20 became 19; old 21 is 21; old 22 to 25 became 22; old 26 is 33; old 27 is 23; old 28 is 36. Step 10b was added on 2026-10-16.
 
 Storage (resume uploads) is turned off in `supabase/config.toml` and gets turned on in step 18. The Data API (PostgREST) is turned off and gets turned on in step 9.
 
@@ -545,7 +577,7 @@ Three launches, each independent of the next, so **no phase blocks the first lau
 
 | Launch | When | What goes live | What it needs |
 |---|---|---|---|
-| **1. Website** | After Phase A1 and A2 (steps 8 to 23) | Employers post and pay and manage applicants on the web. Seekers browse, apply and manage their applications on the web. Public SEO pages. Admin. | Final Privacy Policy and Terms live (step 22), which also lifts the live Stripe block (step 17); production hosting with the API always on; a production Supabase project with backups; production environment values and the CORS list; email alerts working; domain and https; error monitoring and an alert when the webhook fails. The first live check is the owner posting one real job for $2.50 and confirming it publishes. |
+| **1. Website** | After Phase A1 and A2 (steps 8 to 23, including 10b) | Employers post and pay and manage applicants on the web. Seekers browse, apply and manage their applications on the web. Public SEO pages. Admin. | Final Privacy Policy and Terms live (step 22), which also lifts the live Stripe block (step 17); production hosting with the API always on; a production Supabase project with backups; production environment values and the CORS list; email alerts working; domain and https; error monitoring and an alert when the webhook fails; **every box in the pre-launch checklist in `docs/SECURITY.md` ticked, including the OWASP review**; the SEO checklist in section 8.2 done. The first live check is the owner posting one real job for $2.50 and confirming it publishes. |
 | **2. Mobile app** | After Phase B (steps 24 to 32), Android first, then iPhone | The seeker app in the stores. Store links then appear on the web pages. | Everything the stores need (section 10), a finished closed-test period if the Google account is personal, account deletion, reviewer accounts and real listings. |
 | **3. Hiring Pro** | After Phase C (steps 33 to 36) | Billing, the opt-in directory search for employers, invitations, and the launch notification to opted-in seekers. | A meaningful number of opted-in seekers (the directory is only as useful as the seekers who opt in), plus the web and the app both live. |
 
@@ -557,7 +589,7 @@ Rules that keep it that way:
 
 ## 12. Tests
 
-`npm test` runs everything: **775 tests** after step 8 (345 in the `node` project, 250 website component tests in jsdom, 158 RLS, 22 against real Supabase). `npm run test:fast` runs the `node` and `web-components` projects only (595 tests) and needs no Docker. Counts per suite are in `npx vitest list`.
+`npm test` runs everything: **775 tests** after step 8 (345 in the `node` project, 250 website component tests in jsdom, 158 RLS, 22 against real Supabase). `npm run test:fast` runs the `node` and `web-components` projects only (595 tests) and needs no Docker. Counts per suite are in `npx vitest list`. `docs/SECURITY.md` section 5 lists the security tests each later step must add.
 
 ### RLS tests (step 6): 158 tests in 7 suites, against the real local database
 
@@ -647,10 +679,21 @@ Section 7.5 describes them: Jest with `jest-expo`, Testing Library, the source g
 - Supabase Auth limits sign-in and sign-up to about 30 per 5 minutes per IP. Running the integration suites many times in a row can hit that and fail with a rate-limit message; wait a few minutes.
 - Ports 54321 to 54329, so it does not clash with other local Postgres, Redis or MinIO containers.
 
-### Running the API and the website
+### Running the API and the website locally (to try sign-up yourself)
 
-- `npm run dev -w @healthhyr/api` (watch mode) or `npm run start -w @healthhyr/api`, with `apps/api/.env` filled in.
-- `npm run dev -w @healthhyr/web`, with `apps/web/.env.local` filled in. The API must allow the site's origin in `CORS_ALLOWED_ORIGINS`.
+**Needs step 9 first.** `GET /api/v1/me` reads the profile through the Data API, which is off until step 9. Before then, sign-up and the emailed code work, but the site cannot load the account afterwards.
+
+1. Start Docker Desktop, then `npm run db:start`.
+2. `npm run db:status` prints the local URL and keys. Copy values from it into two git-ignored files (never paste keys into chat or commit them):
+   - `apps/api/.env`: `NODE_ENV=development`, `PORT=4000`, `SUPABASE_URL=http://127.0.0.1:54321`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, plus a Stripe **test** key and webhook secret if the API asks for them at boot. The default CORS list already allows `http://localhost:3000` and `http://127.0.0.1:3000`.
+   - `apps/web/.env.local`: `NEXT_PUBLIC_API_BASE_URL=http://localhost:4000`, `NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (the publishable key only).
+3. In one terminal: `npm run dev -w @healthhyr/api`. In another: `npm run dev -w @healthhyr/web`.
+4. Open `http://localhost:3000/sign-up`, create an account, then read the 6-digit code in the mail catcher at `http://127.0.0.1:54324` and enter it.
+5. Use `http://localhost:3000` consistently (not a mix of `localhost` and `127.0.0.1`), so the browser origin matches the CORS list.
+
+Other notes:
+
+- `npm run start -w @healthhyr/api` runs the API without watch mode.
 - The server logs one JSON line per event. `PORT=0` picks a free port (not allowed in production).
 
 ## 14. What this plan will install (step 8 added one package)
@@ -661,9 +704,10 @@ Sizes are npm's unpacked size for the package itself. Each package also brings d
 
 | Step | Package | Size | Why |
 |---|---|---|---|
+| 9 | Docker image: PostgREST (the Data API), no npm package | 6.5 MB compressed (newest tag in Supabase's public registry; the CLI pins its own version) | RLS through the per-request client, end to end |
+| 10b | Possibly CI, `npm audit` and Dependabot configuration (repository files and GitHub settings, no npm package) | none | Supply-chain checks. Owner approves before they are added |
 | 13, 15 | `stripe` 23.0.0 | 16.5 MB | Checkout sessions, webhook signature check, refunds (API) |
 | 16 | `nodemailer` 10.1.2, `@types/nodemailer` | 1.6 MB, 0.1 MB | Zoho SMTP alerts (API) |
-| 9 | Docker image: PostgREST (the Data API) | about 6 MB compressed | RLS through the per-request client, end to end |
 | 18 | Docker image: Supabase Storage | about 240 MB compressed | Resume uploads locally |
 | 24 | `expo` 58.0.12 | 1.7 MB | The app framework |
 | 24 | `react-native` 0.88.0 | 20.2 MB | The runtime |
@@ -680,6 +724,8 @@ Sizes are npm's unpacked size for the package itself. Each package also brings d
 | 30 | `expo-notifications`, `expo-device`, `expo-dev-client` | 1.5, 0.2, 0.1 MB | Push notifications and development builds |
 | 30 | `expo-server-sdk` | under 0.1 MB | The API sending pushes through Expo |
 | 31 | none | | Account deletion uses existing packages |
+
+Also to be decided with the owner before launch 1, each needing approval first because they add a tool or a service: an error-monitoring service (`docs/SECURITY.md`), a Lighthouse or equivalent performance check (section 8.2), and an uptime check.
 
 **Direct packages for the app total about 53 MB unpacked, before their own dependencies.**
 
@@ -722,10 +768,17 @@ Decided in step 8:
 
 20. Local email uses the Supabase mail catcher with 6-digit codes and email confirmation ON, matching production. Tests read the codes from the catcher (section 13).
 21. The website holds the publishable key only, and the role always comes from `GET /api/v1/me` (section 6.2).
-22. The anon client moves from step 8 to step 11, where the first public route needs it. `GET /api/v1/me` keeps returning `403 no_profile` for an account without a profile.
+22. `GET /api/v1/me` keeps returning `403 no_profile` for an account without a profile.
+
+Decided after step 8 (owner, 2026-10-16):
+
+23. **Security headers and a nonce-based Content-Security-Policy move to step 10b**, their own commit before the first public route, because the session is in local storage (section 6.2, section 11).
+24. The anon client lands in step 9 with the public company route (it was planned for step 11). Step 9 also adds the end-to-end test that a per-request client with the user's token has RLS applied through the real Data API.
+25. `docs/SECURITY.md` (threat model and pre-launch checklist, with which items are covered by tests and which need new ones), `docs/ARCHITECTURE.md`, and the SEO checklist in section 8.2 are part of the plan. Launch 1 needs every box in the security checklist ticked.
 
 Still open:
 
 - **Google Play account type (personal or organization).** To be decided before Phase B (before step 24). If personal, start recruiting the 12 testers two weeks before the planned launch (owner decision). Planning note: that is the minimum, because the 14-day clock needs a closed-test build and 12 opted-in testers, and Google then reviews the production access request, so the plan keeps the app launch about four weeks after the first closed-test build and aims for 15 to 20 testers (section 10.3).
 - **Apple account type** (individual or organization), which affects how the developer name appears in the store.
-- **Web security headers and a Content-Security-Policy** (the session is in local storage; section 6.2). Recommended before launch 1; scheduled in step 36 unless the owner wants it earlier.
+- **Per-request nonce versus cacheable public pages** (step 10b): decided with measurements at that step (`docs/SECURITY.md`).
+- **CI, error monitoring, uptime check and a performance tool:** each adds a tool or service, so each needs the owner's approval before it is added (section 14).
