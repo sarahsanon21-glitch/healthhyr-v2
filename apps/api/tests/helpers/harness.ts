@@ -1,9 +1,13 @@
 // Test harness for the API. Tokens are signed with keys generated here, and the "database" is a
-// stand-in for the user's Supabase client, so no network and no real Supabase are involved.
+// stand-in for the Supabase clients, so no network and no real Supabase are involved.
+//
+// The stand-in answers the way the real database would for the tables the API touches, including
+// what row-level security allows, and it records every query so tests can check what the code asked
+// for. Real RLS through the real Data API is tested separately in tests/integration.
 import { randomUUID } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Express, Router } from 'express';
-import { SignJWT, createLocalJWKSet, exportJWK, generateKeyPair, type CryptoKey, type JWK } from 'jose';
+import { SignJWT, createLocalJWKSet, decodeJwt, exportJWK, generateKeyPair, type CryptoKey, type JWK } from 'jose';
 import { z } from 'zod';
 import { createApp, type AppOptions } from '../../src/app';
 import { createTokenVerifier } from '../../src/auth/verifyToken';
@@ -65,9 +69,46 @@ export interface ProfileRow {
   role: string;
 }
 
+/**
+ * A whole employer_profiles row, including columns no response may show. The stand-in returns all
+ * of it on purpose: it is the worst case, so a route that forgets to pick fields gets caught.
+ */
+export interface CompanyRow {
+  id: string;
+  company_name: string;
+  is_listed: boolean;
+  slug: string | null;
+  description: string | null;
+  website: string | null;
+  logo_url: string | null;
+  industry: string | null;
+  company_size: string | null;
+  city: string | null;
+  state: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface FakeDbOptions {
   /** What the profiles query returns as an error. */
   error?: { message: string; code?: string };
+  /** What any employer_profiles query returns as an error. */
+  companyError?: { message: string; code?: string };
+  /**
+   * Whether the stand-in applies row-level security. On (the default) it behaves like the real
+   * database. Off, it answers any row the query asks for, which shows what the CODE would do if the
+   * policies were ever loosened.
+   */
+  rls?: boolean;
+}
+
+export interface QueryRecord {
+  client: 'user' | 'anon';
+  table: string;
+  op: 'select' | 'update';
+  columns?: string;
+  values?: Record<string, unknown>;
+  filters: Array<[column: string, value: unknown]>;
 }
 
 export interface Recorder {
@@ -75,6 +116,8 @@ export interface Recorder {
   clientTokens: string[];
   /** Every profiles lookup: which column and value it filtered on. */
   lookups: Array<{ table: string; column: string; value: unknown }>;
+  /** Every query to a table other than profiles, by either client. */
+  queries: QueryRecord[];
 }
 
 export interface LogEntry {
@@ -89,10 +132,14 @@ export interface TestApp {
   otherKey: TestKey;
   /** profiles table stand-in: user id -> row (null means no row). */
   profiles: Map<string, ProfileRow | null>;
+  /** employer_profiles table stand-in: employer id -> row. */
+  companies: Map<string, CompanyRow>;
   recorder: Recorder;
   logs: LogEntry[];
-  /** A valid token for a user. With a role, also creates the profile row. */
+  /** A valid token for a user. With a role, also creates the profile row (and a company row for an employer). */
   login: (role?: string | null, options?: TokenOptions) => Promise<{ token: string; userId: string; authorization: string }>;
+  /** Puts a company row in the stand-in, as the signup trigger and later edits would. */
+  addCompany: (id: string, fields?: Partial<CompanyRow>) => CompanyRow;
 }
 
 export interface MakeAppOptions
@@ -125,32 +172,122 @@ function testRoutes(api: Router): void {
   api.post('/echo', (req, res) => void res.json({ received: req.body }));
 }
 
-function fakeUserClient(profiles: Map<string, ProfileRow | null>, recorder: Recorder, dbOptions: FakeDbOptions): (token: string) => SupabaseClient {
-  return (token) => {
-    recorder.clientTokens.push(token);
-    const client = {
-      from: (table: string) => ({
-        select: () => ({
-          eq: (column: string, value: unknown) => ({
-            maybeSingle: async () => {
-              recorder.lookups.push({ table, column, value });
-              if (dbOptions.error) return { data: null, error: dbOptions.error };
-              return { data: profiles.get(String(value)) ?? null, error: null };
-            },
-          }),
-        }),
-      }),
-    };
-    return client as unknown as SupabaseClient;
+const DEFAULT_COMPANY_NAME = 'My company';
+
+/** Mirrors the employer_profiles_listing trigger in the schema. */
+function applyListingTrigger(row: CompanyRow): void {
+  row.is_listed = row.company_name.trim().length > 0 && row.company_name !== DEFAULT_COMPANY_NAME;
+  if (row.is_listed && row.slug === null) {
+    const base = row.company_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    row.slug = `${base}-${row.id.slice(0, 6)}`;
+  }
+}
+
+export function makeCompanyRow(id: string, fields: Partial<CompanyRow> = {}): CompanyRow {
+  const row: CompanyRow = {
+    id,
+    company_name: DEFAULT_COMPANY_NAME,
+    is_listed: false,
+    slug: null,
+    description: null,
+    website: null,
+    logo_url: null,
+    industry: null,
+    company_size: null,
+    city: null,
+    state: null,
+    created_at: '2026-01-01T00:00:00Z',
+    updated_at: '2026-01-01T00:00:00Z',
+    ...fields,
   };
+  if (fields.is_listed === undefined && fields.slug === undefined) applyListingTrigger(row);
+  return row;
+}
+
+interface Stores {
+  profiles: Map<string, ProfileRow | null>;
+  companies: Map<string, CompanyRow>;
+  recorder: Recorder;
+  dbOptions: FakeDbOptions;
+}
+
+function tokenUser(token: string | null): string | null {
+  if (!token) return null;
+  try {
+    return decodeJwt(token).sub ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** A Supabase client stand-in. `token` is null for the anon client. */
+function fakeClient(stores: Stores, token: string | null): SupabaseClient {
+  const { profiles, companies, recorder, dbOptions } = stores;
+  const user = tokenUser(token);
+  const rls = dbOptions.rls ?? true;
+  const client: QueryRecord['client'] = token ? 'user' : 'anon';
+
+  const from = (table: string) => {
+    const query: QueryRecord = { client, table, op: 'select', filters: [] };
+    const builder = {
+      select(columns?: string) {
+        if (columns !== undefined && query.op === 'select') query.columns = columns;
+        return builder;
+      },
+      update(values: Record<string, unknown>) {
+        query.op = 'update';
+        query.values = values;
+        return builder;
+      },
+      eq(column: string, value: unknown) {
+        query.filters.push([column, value]);
+        return builder;
+      },
+      async maybeSingle() {
+        if (table === 'profiles') {
+          const filter = query.filters[0];
+          recorder.lookups.push({ table, column: filter?.[0] ?? '', value: filter?.[1] });
+          if (dbOptions.error) return { data: null, error: dbOptions.error };
+          return { data: profiles.get(String(filter?.[1])) ?? null, error: null };
+        }
+
+        recorder.queries.push(query);
+        if (dbOptions.companyError) return { data: null, error: dbOptions.companyError };
+        if (table !== 'employer_profiles') return { data: null, error: null };
+
+        const matching = [...companies.values()].filter((row) =>
+          query.filters.every(([column, value]) => (row as unknown as Record<string, unknown>)[column] === value),
+        );
+
+        if (query.op === 'update') {
+          if (client === 'anon') return { data: null, error: { message: 'permission denied for table employer_profiles', code: '42501' } };
+          const row = matching.find((candidate) => !rls || candidate.id === user);
+          if (!row) return { data: null, error: null };
+          Object.assign(row, query.values);
+          applyListingTrigger(row);
+          return { data: { ...row }, error: null };
+        }
+
+        // select: anyone sees listed companies; a signed-in owner also sees their own (policy employer_select)
+        const visible = matching.filter((row) => !rls || row.is_listed || (client === 'user' && row.id === user));
+        if (visible.length > 1) return { data: null, error: { message: 'multiple rows', code: 'PGRST116' } };
+        return { data: visible[0] ? { ...visible[0] } : null, error: null };
+      },
+    };
+    return builder;
+  };
+
+  return { from } as unknown as SupabaseClient;
 }
 
 export async function makeApp(options: MakeAppOptions = {}): Promise<TestApp> {
   const signingKey = await makeKey('test-key-1');
   const otherKey = await makeKey('attacker-key');
   const profiles = new Map<string, ProfileRow | null>();
-  const recorder: Recorder = { clientTokens: [], lookups: [] };
+  const companies = new Map<string, CompanyRow>();
+  const recorder: Recorder = { clientTokens: [], lookups: [], queries: [] };
   const logs: LogEntry[] = [];
+  const stores: Stores = { profiles, companies, recorder, dbOptions: options.db ?? {} };
 
   const logger: Logger = {
     info: (fields, message) => void logs.push({ level: 'info', message, fields }),
@@ -164,7 +301,11 @@ export async function makeApp(options: MakeAppOptions = {}): Promise<TestApp> {
     rateLimit: options.rateLimit ?? { windowMs: 60_000, max: 1000 },
     userRateLimit: options.userRateLimit ?? { windowMs: 60_000, max: 1000 },
     verifyToken: createTokenVerifier({ keys: createLocalJWKSet({ keys: [signingKey.publicJwk] }), issuer: ISSUER, audience: AUDIENCE }),
-    createUserClient: fakeUserClient(profiles, recorder, options.db ?? {}),
+    createUserClient: (token) => {
+      recorder.clientTokens.push(token);
+      return fakeClient(stores, token);
+    },
+    anonClient: fakeClient(stores, null),
     logger,
     ...(options.stripeWebhook && { stripeWebhook: options.stripeWebhook }),
     ...(options.jsonLimit && { jsonLimit: options.jsonLimit }),
@@ -179,11 +320,21 @@ export async function makeApp(options: MakeAppOptions = {}): Promise<TestApp> {
     signingKey,
     otherKey,
     profiles,
+    companies,
     recorder,
     logs,
+    addCompany: (id, fields = {}) => {
+      const row = makeCompanyRow(id, fields);
+      companies.set(id, row);
+      return row;
+    },
     login: async (role = 'seeker', tokenOptions = {}) => {
       const userId = tokenOptions.sub ?? randomUUID();
-      if (role !== null) profiles.set(userId, { id: userId, role });
+      if (role !== null) {
+        profiles.set(userId, { id: userId, role });
+        // The signup trigger gives every employer a company row, still on the default name.
+        if (role === 'employer') companies.set(userId, makeCompanyRow(userId));
+      }
       const token = await signToken(signingKey, { ...tokenOptions, sub: userId });
       return { token, userId, authorization: `Bearer ${token}` };
     },

@@ -1,5 +1,5 @@
 // Test doubles for the website's auth layer.
-import type { UserRole } from '@healthhyr/shared';
+import type { CompanyProfileResponse, UserRole } from '@healthhyr/shared';
 import { vi } from 'vitest';
 import { ApiError, type ApiClient } from '../../src/lib/api/client';
 import { createAuthService } from '../../src/lib/auth/service';
@@ -49,15 +49,61 @@ export function makeBackend(overrides: Partial<AuthBackend> = {}): FakeBackend {
 
 export interface FakeApi extends ApiClient {
   getMe: ReturnType<typeof vi.fn> & ApiClient['getMe'];
+  getMyCompany: ReturnType<typeof vi.fn> & ApiClient['getMyCompany'];
+  saveMyCompany: ReturnType<typeof vi.fn> & ApiClient['saveMyCompany'];
 }
 
-/** An API that answers GET /api/v1/me with the given role. */
-export function makeApi(role: UserRole | ApiError = 'seeker'): FakeApi {
+/** A company profile as the API returns it. */
+export const makeCompany = (fields: Partial<CompanyProfileResponse> = {}): CompanyProfileResponse => ({
+  companyName: 'My company',
+  description: null,
+  website: null,
+  logoUrl: null,
+  industry: null,
+  companySize: null,
+  city: null,
+  state: null,
+  isListed: false,
+  slug: null,
+  ...fields,
+});
+
+/**
+ * An API that answers GET /api/v1/me with the given role. By default, saving a company returns what
+ * was sent (as the API would, with the listing decided like the database trigger does).
+ */
+export function makeApi(
+  role: UserRole | ApiError = 'seeker',
+  company: { load?: CompanyProfileResponse | ApiError; save?: CompanyProfileResponse | ApiError | ((input: Record<string, unknown>) => CompanyProfileResponse) } = {},
+): FakeApi {
   const getMe = vi.fn(async () => {
     if (role instanceof ApiError) throw role;
     return { id: USER_ID, role };
   });
-  return { getMe } as FakeApi;
+  const getMyCompany = vi.fn(async () => {
+    if (company.load instanceof ApiError) throw company.load;
+    return company.load ?? makeCompany();
+  });
+  const saveMyCompany = vi.fn(async (input: Record<string, unknown>) => {
+    const save = company.save;
+    if (save instanceof ApiError) throw save;
+    if (typeof save === 'function') return save(input);
+    if (save) return save;
+    const name = String(input.companyName ?? '');
+    const listed = name.trim() !== '' && name !== 'My company';
+    return makeCompany({
+      companyName: name,
+      description: (input.description as string | null | undefined) ?? null,
+      website: (input.website as string | null | undefined) ?? null,
+      industry: (input.industry as string | null | undefined) ?? null,
+      companySize: (input.companySize as string | null | undefined) ?? null,
+      city: (input.city as string | null | undefined) ?? null,
+      state: (input.state as string | null | undefined) ?? null,
+      isListed: listed,
+      slug: listed ? 'sunrise-home-care-3f0c9a' : null,
+    });
+  });
+  return { getMe, getMyCompany, saveMyCompany } as FakeApi;
 }
 
 /** The real auth service wired to fake backend and API: the whole sign-in logic, no network. */

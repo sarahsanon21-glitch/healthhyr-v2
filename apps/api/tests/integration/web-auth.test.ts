@@ -1,6 +1,6 @@
 // The website's real auth code against the REAL local Supabase Auth (GoTrue), its real mail catcher,
-// and the real HealthHyr API app listening on a local port. Only the API's database lookup is a
-// stand-in that reads the real profiles table (the Data API is off locally until step 9).
+// the real Data API (PostgREST, so row-level security applies) and the real HealthHyr API app
+// listening on a local port.
 //
 // This proves what the component tests cannot: that sign-up, emailed codes, sign-in, password reset
 // and the role from GET /api/v1/me work end to end, and that asking for admin gets nobody admin.
@@ -8,7 +8,6 @@
 import { randomUUID } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import type { SupabaseClient } from '@supabase/supabase-js';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { clearMailFor, waitForCode } from '../../../../tests/support/mailpit';
@@ -18,6 +17,8 @@ import { createAuthService } from '../../../web/src/lib/auth/service';
 import { parsePublicEnv } from '../../../web/src/lib/public-env';
 import { createApp } from '../../src/app';
 import { createTokenVerifier, remoteKeys } from '../../src/auth/verifyToken';
+import { createAnonClient } from '../../src/lib/anonClient';
+import { createUserClientFactory } from '../../src/lib/userClient';
 import { silentLogger } from '../../src/logger';
 import { supabaseEnv } from './env';
 
@@ -58,22 +59,9 @@ beforeAll(async () => {
     userRateLimit: { windowMs: 60_000, max: 10_000 },
     verifyToken,
     logger: silentLogger,
-    // Answers from the real profiles table, looked up for whichever user the verified token names.
-    createUserClient: (token: string) => {
-      const userId = JSON.parse(Buffer.from(token.split('.')[1]!, 'base64url').toString('utf8')).sub as string;
-      return {
-        from: () => ({
-          select: () => ({
-            eq: () => ({
-              maybeSingle: async () => {
-                const result = await db.query('select id, role from public.profiles where id = $1', [userId]);
-                return { data: result.rows[0] ?? null, error: null };
-              },
-            }),
-          }),
-        }),
-      } as unknown as SupabaseClient;
-    },
+    // The real clients: each request reads the profile through the real Data API as the signed-in user.
+    createUserClient: createUserClientFactory({ url, anonKey }),
+    anonClient: createAnonClient({ url, anonKey }),
   });
   await new Promise<void>((resolve) => {
     server = app.listen(0, '127.0.0.1', () => resolve());

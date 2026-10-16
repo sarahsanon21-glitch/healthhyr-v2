@@ -1,17 +1,20 @@
 # Local Supabase for HealthHyr v2.
 # Reference: https://supabase.com/docs/guides/local-development/cli/config
 #
-# Only the database and Auth run locally for now, plus a mail catcher so emailed codes can be read
-# in tests. Turn on [storage] (resume uploads), [api] and [studio] when a later step needs them.
+# Runs the database, Auth, the Data API (PostgREST) and a mail catcher so emailed codes can be read
+# in tests. Turn on [storage] (resume uploads) in step 18 and [studio] only if needed.
 # They pull extra Docker images when enabled.
 # Local keys are printed by `npm run db:status`. Keep them in git-ignored .env files only.
 
 project_id = "healthhyr-v2"
 
+# The Data API (PostgREST). Only the HealthHyr API talks to it, using each user's own token so
+# row-level security applies. The browser never calls it. Only "public" is exposed: the "private"
+# schema holds helper functions that must not be reachable through the API.
 [api]
-enabled = false
+enabled = true
 port = 54321
-schemas = ["public", "graphql_public"]
+schemas = ["public"]
 extra_search_path = ["public", "extensions"]
 max_rows = 1000
 

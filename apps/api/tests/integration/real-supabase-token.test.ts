@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { clearMailFor, waitForCode } from '../../../../tests/support/mailpit';
 import { createApp } from '../../src/app';
 import { TokenError, createTokenVerifier, remoteKeys } from '../../src/auth/verifyToken';
+import { createAnonClient } from '../../src/lib/anonClient';
 import { silentLogger } from '../../src/logger';
 import { supabaseEnv } from './env';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -121,6 +122,7 @@ describe('a real Supabase access token', () => {
 describe('the real token through the whole app', () => {
   // The user's Supabase client is a stand-in that answers from the REAL profiles table, read
   // below with a separate database connection, so this checks the signup trigger and the API agree.
+  // (The same flow through the real Data API, with row-level security, is in data-api.test.ts.)
   async function profileRole(): Promise<string | null> {
     const result = await db.query('select role from public.profiles where id = $1', [userId]);
     return (result.rows[0] as { role: string } | undefined)?.role ?? null;
@@ -133,6 +135,7 @@ describe('the real token through the whole app', () => {
       rateLimit: { windowMs: 60_000, max: 1000 },
       userRateLimit: { windowMs: 60_000, max: 1000 },
       verifyToken: verifier,
+      anonClient: createAnonClient({ url, anonKey }),
       logger: silentLogger,
       createUserClient: () =>
         ({

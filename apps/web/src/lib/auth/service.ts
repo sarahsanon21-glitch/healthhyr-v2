@@ -56,7 +56,8 @@ const failure = (error: BackendError): AuthResult & SignUpResult => {
 
 export interface AuthServiceDeps {
   backend: AuthBackend;
-  api: ApiClient;
+  /** The only thing the auth service asks the API is "who am I?". */
+  api: Pick<ApiClient, 'getMe'>;
 }
 
 export function createAuthService({ backend, api }: AuthServiceDeps): AuthService {

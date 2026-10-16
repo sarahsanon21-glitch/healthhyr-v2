@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js';
 import express, { Router, type Express, type RequestHandler } from 'express';
 import helmet from 'helmet';
 import type { TokenVerifier } from './auth/verifyToken';
@@ -11,6 +12,7 @@ import { healthRouter } from './routes/health';
 import { API_V1, STRIPE_WEBHOOK_PATH } from './routes/paths';
 import { reservedStripeWebhook } from './routes/stripeWebhook';
 import { registerV1Routes } from './routes/v1';
+import { publicRouter } from './routes/v1/public';
 
 /**
  * Everything the app needs, and nothing secret: no service-role key and no Stripe key come in here.
@@ -25,6 +27,8 @@ export interface AppOptions {
   userRateLimit?: RateLimitOptions;
   verifyToken: TokenVerifier;
   createUserClient: UserClientFactory;
+  /** Anon-key client for public routes (no signed-in user). Row-level security decides what it sees. */
+  anonClient: SupabaseClient;
   logger?: Logger;
   /** Replaces the reserved Stripe webhook handler. It receives the raw body as a Buffer. */
   stripeWebhook?: RequestHandler;
@@ -56,6 +60,11 @@ export function createApp(options: AppOptions): Express {
   app.use(corsAllowlist(options.corsOrigins));
   app.use(rateLimiter(options.rateLimit));
   app.use(express.json({ limit: options.jsonLimit ?? '100kb' }));
+
+  // Public routes: no sign-in, so they come before `authenticate`. They still get the per-IP limit.
+  // An unknown public path is a plain 404 (it must not fall through to the signed-in routes and
+  // answer 401 instead).
+  app.use(`${API_V1}/public`, publicRouter(options.anonClient), notFoundHandler);
 
   const api = Router();
   api.use(authenticate({ verifyToken: options.verifyToken, createUserClient: options.createUserClient }));

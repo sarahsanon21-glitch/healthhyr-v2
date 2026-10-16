@@ -82,16 +82,16 @@ healthhyr-v2/
 ├─ apps/web/             Next.js (App Router) + Tailwind
 │  └─ src/
 │     ├─ app/(public)/   page.tsx (Home), jobs/page.tsx, jobs/[slug]/page.tsx,
-│     │                  companies/[slug]/page.tsx (step 9), pricing, for-employers, about, contact, terms, privacy, delete-account
+│     │                  companies/[slug]/page.tsx (step 9, noindex until step 12), pricing, for-employers, about, contact, terms, privacy, delete-account
 │     ├─ app/(auth)/     (step 8) sign-in, sign-up, forgot-password (noindex)
-│     ├─ app/(employer)/ dashboard, jobs, applicants, messages, company (client-side, noindex)
+│     ├─ app/(employer)/ dashboard, company (step 9), jobs, applicants, messages (client-side, noindex)
 │     ├─ app/(seeker)/   (adjusted) profile, applications (minimal seeker site, noindex)
 │     ├─ app/(admin)/    (step 8) admin (noindex)
 │     ├─ app/sitemap.ts, robots.ts, layout.tsx
 │     ├─ (step 10b) the request interceptor that sets the security headers and the per-request nonce
-│     ├─ components/ui/  base components; components/auth/ and components/account/ (step 8); components/ feature components
-│     └─ lib/            public-env.ts (the only place the site reads the environment), api/client.ts (the only place it calls fetch),
-│                        auth/ (Supabase adapter, state machine, guards, redirects), seo/jobPostingJsonLd.ts, seo/canonical.ts
+│     ├─ components/ui/  base components; components/auth/, components/account/ (step 8) and components/company/ (step 9); components/ feature components
+│     └─ lib/            public-env.ts (the only place the site reads the environment), api/client.ts (the only place it calls fetch; also the public client),
+│                        api/public.ts (server-side public calls), auth/ (Supabase adapter, state machine, guards, redirects), seo/jobPostingJsonLd.ts, seo/canonical.ts
 ├─ apps/mobile/          (adjusted) Expo app, seekers only
 │  ├─ app/               expo-router screens: (auth), (tabs): jobs, saved, applications, messages, profile
 │  ├─ src/
@@ -110,11 +110,11 @@ healthhyr-v2/
 │  │  ├─ auth/           verifyToken.ts (JWKS, asymmetric algorithms only)
 │  │  ├─ middleware/     requestId, auth (token, then role from the database), requireRole, errorHandler, security (CORS, per-IP and per-user rate limits)
 │  │  ├─ lib/            userClient.ts (per-request, RLS applies), anonClient.ts (public reads, step 9), serviceClient.ts (bypasses RLS, server-only)
-│  │  ├─ routes/         paths.ts (API_V1, webhook path), stripeWebhook.ts (reserved); v1/ (me, then public/, seeker/, employer/, admin/ per section 6.1)
+│  │  ├─ routes/         paths.ts (API_V1, webhook path), stripeWebhook.ts (reserved); v1/ (me, employer, public, then seeker/, admin/ per section 6.1)
 │  │  └─ services/       server-only operations, the only code allowed to use the service client: stripe, checkout, publish, mailer, push, accountDeletion, notifications, jobs (expire, reconcile)
 │  └─ tests/             supertest suites, boot test, service-role scanner, integration/ (real Supabase)
 └─ supabase/
-   ├─ config.toml        local stack: database, auth and the mail catcher (the Data API is turned on in step 9, storage in step 18)
+   ├─ config.toml        local stack: database, auth, the Data API (step 9) and the mail catcher (storage is turned on in step 18)
    ├─ templates/         confirmation.html and recovery.html: the emailed 6-digit code
    ├─ migrations/        0001_schema.sql (executable source of truth); later migrations listed in section 5.5
    └─ tests/
@@ -198,7 +198,7 @@ The SQL is `supabase/migrations/0001_schema.sql`. It was written from the first 
 
 Where two layers cover the same thing (a column privilege and a trigger), weakening one must not be noticed and weakening both must be. The mutation runner checks both cases.
 
-Helper functions that take arbitrary ids (`is_admin`, `employer_holds_application_from`, `has_active_hiring_pro`, `employer_can_view_seeker`, `can_message`) live in a `private` schema that the Data API does not expose. They are still executable by the roles, so policies can call them.
+Helper functions that take arbitrary ids (`is_admin`, `employer_holds_application_from`, `has_active_hiring_pro`, `employer_can_view_seeker`, `can_message`) live in a `private` schema that the Data API does not expose. They are still executable by the roles, so policies can call them. The Data API configuration exposes only the `public` schema, and a test confirms the private functions are not reachable through it.
 
 ### 5.3 What testing against real Supabase found (2026-10-16)
 
@@ -207,6 +207,8 @@ Fixed in `0001_schema.sql` before the first commit of the migration:
 - **Over-broad default privileges.** Supabase grants every API role `ALL` on new tables, including `TRUNCATE`, `REFERENCES` and `TRIGGER`. Row-level security does not apply to `TRUNCATE`. The migration now revokes everything from `anon` and `authenticated` and grants back only what is needed, and changes default privileges so later tables start closed. Tests fail if a future migration leaves a gap.
 - **Helper functions callable through the API.** In `public`, any signed-in user could call `can_message(...)` or `has_active_hiring_pro(...)` with arbitrary ids to learn who opted in, who applied where, or who has Hiring Pro. They moved to the `private` schema.
 - **Wrong refusal reason from `publish_job`.** The function reported `payment_already_consumed` for every refusal, because its diagnostic ran after its own first step. The transaction still rolled back, so no money logic broke, but the admin alert would have carried the wrong reason. It now works out the reason before changing anything.
+
+**Found in step 9, when the Data API went on:** a signed-in user holding their own token can write the columns they are allowed to update (for example `employer_profiles.website` and `description`) straight through the Data API, skipping the API's validation. Row-level security and column privileges still hold (they cannot touch anyone else's row, nor `is_listed` or `slug`). But format and length rules that only exist in the API (a website must be an http or https address, description at most 5,000 characters) can be bypassed. Today's answer: anything shown publicly is re-checked on the way out (the public company route drops a website that is not http or https, and the page does it again). Planned fix: database CHECK constraints for the same rules, in a numbered migration with RLS and mutation tests (section 15, open items).
 
 ### 5.4 Deferred schema (Hiring Pro build)
 
@@ -222,6 +224,7 @@ The schema, RLS and API are unchanged except for the items below. None of them b
 | `0003_push_tokens` | Push notifications | `push_tokens` (user id, Expo push token unique, platform, device id, created and last-seen times). RLS: the owner reads, inserts and deletes only their own. The API prunes tokens that Expo reports as no longer registered. | 30 |
 | `0004_report_and_block` | Store rules for user-generated content (messages between employers and seekers): a way to report a message and to block a user | `message_reports` and `user_blocks` with RLS; `private.can_message` also refuses when a block exists in either direction. This is a change to an existing function, so it gets its own tests and a mutation entry. To be confirmed against the current Apple and Google wording when step 29 starts. | 29 |
 | later | Hiring Pro | `invitations`, subscription columns (section 5.4) | 34 to 35 |
+| to schedule | Database CHECK constraints for the format and length rules that only the API enforces today (section 5.3) | Decide the step with the owner; the first step that adds a user-editable text column (step 10, jobs) is the natural place | 10 or later |
 
 Account deletion needs no schema change. Deleting the auth user cascades through the seeker's profile, private row, experience, certifications, languages, applications, saved jobs, notifications and messages (both directions). `contact_messages.user_id` becomes null. Employer accounts cannot be deleted this way, because payment history is never deleted (`payments.employer_id` restricts), so employer deletion is a support request for now. Employer accounts are not created in the app.
 
@@ -232,7 +235,7 @@ Account deletion needs no schema change. Deleting the auth user cascades through
 **Which Supabase client (the central rule).**
 
 - **User-initiated reads and writes use `req.auth.db`**: a per-request Supabase client built with the anon key and the caller's own JWT (`src/lib/userClient.ts`). Postgres runs the query as that user, so row-level security and the column privileges apply. This is the default for every route that serves a signed-in person.
-- **Public reads (no sign-in) use an anon-key client** (`src/lib/anonClient.ts`, added in step 9 with the public company route), so the anon role's row-level security decides what is visible (listed employers' pages now, published unexpired jobs from step 11).
+- **Public reads (no sign-in) use an anon-key client** (`src/lib/anonClient.ts`, built in step 9 with the public company route), so the anon role's row-level security decides what is visible (listed employers' pages now, published unexpired jobs from step 11).
 - **The service-role client (`src/lib/serviceClient.ts`) bypasses RLS** and is for server-only operations that no user performs directly: Stripe webhooks, `publish_job` and the other server-only SQL functions, expiry and reconcile jobs, and audited admin actions. That code lives in `src/services/`.
 - **Any endpoint that needs the service client checks ownership in code**, because the database will not.
 - **A test enforces it.** `apps/api/tests/service-role-scan.test.ts` scans the API source and fails if a route, middleware or `app.ts` imports the service-role client without a `// service-role-allowed: <reason>` comment (the reason is required). It also fails if the service-role key is named outside `env.ts`, `server.ts` and `lib/serviceClient.ts`, if `process.env` is read outside `env.ts` and `server.ts`, or if the Stripe secret key is named outside them.
@@ -254,14 +257,14 @@ Account deletion needs no schema change. Deleting the auth user cascades through
 4. A valid token with no profile row gets `403 no_profile`. An expired token gets `401 token_expired`; any other bad token gets `401 invalid_token`.
 5. `requireRole(...)` allows only the listed roles. If authentication did not run, it answers 401, so a mistake in route order fails closed.
 
-Projects still using a shared-secret (HS256) JWT would need to move to Supabase's signing keys, which is the default for new projects and for the local stack.
+Projects still using a shared-secret (HS256) JWT would need to move to Supabase's signing keys, which is the default for new projects and for the local stack. (Confirmed in step 9: the local Data API accepts the ES256 tokens Supabase Auth issues.)
 
 **Errors** (`middleware/errorHandler.ts`): one handler. A response never contains a stack trace, file path, SQL, database error text, or anything the caller sent. Known errors (`HttpError`, validation, bad JSON, body too large) get fixed friendly messages. Everything else is a generic 500 with a request id. The full error, including Supabase's plain-object errors, goes to the server log with the same request id. Every response carries `X-Request-Id`.
 
-**Security middleware** (`app.ts` order): request id, helmet, the Stripe webhook route, health, CORS allowlist, per-IP rate limit (draft-7 headers, 429 JSON), JSON parser (100 KB), then the `/api/v1` router (authenticate, per-user rate limit, routes), JSON 404, error handler.
+**Security middleware** (`app.ts` order): request id, helmet, the Stripe webhook route, health, CORS allowlist, per-IP rate limit (draft-7 headers, 429 JSON), JSON parser (100 KB), then the public routes under `/api/v1/public` (no sign-in; an unknown public path is a 404), then the `/api/v1` router (authenticate, per-user rate limit, routes), JSON 404, error handler.
 
 - **CORS allowlist:** a browser request from an unlisted origin gets 403, not just missing headers. Requests with no `Origin` (Stripe, curl, servers, **and the mobile app**) pass. Credentials are off (bearer tokens, no cookies). Production requires an explicit list.
-- **Rate limiting** counts failed and successful requests alike, so token guessing is throttled. The per-IP limit runs first. After authentication, a per-user limit (keyed by user id, `USER_RATE_LIMIT_WINDOW_MS` and `USER_RATE_LIMIT_MAX`) runs too, so many phones behind one carrier IP do not punish each other. `strictLimiter` is there for expensive endpoints later.
+- **Rate limiting** counts failed and successful requests alike, so token guessing is throttled. The per-IP limit runs first, including on public routes. After authentication, a per-user limit (keyed by user id, `USER_RATE_LIMIT_WINDOW_MS` and `USER_RATE_LIMIT_MAX`) runs too, so many phones behind one carrier IP do not punish each other. `strictLimiter` is there for expensive endpoints later.
 - **Stripe webhook route** `POST /api/webhooks/stripe` is mounted before CORS, the rate limit and the JSON parser, with a raw 1 MB body parser, so signature verification (step 15) gets the exact bytes Stripe sent. It needs no sign-in and is not throttled. Until it is built it answers 501. **It keeps this path, which is not versioned, because Stripe is configured with the URL.**
 
 **Configuration** (`env.ts`): validated with zod at boot. The process exits with code 1 and names every problem, never printing a value. It refuses a live Stripe key outside production, and in production requires https, an explicit CORS list and an explicit port.
@@ -272,8 +275,8 @@ Nothing existing changes except the version prefix. These are new routes. "Clien
 
 | Group | Route | Who | Client | Needed by | Step |
 |---|---|---|---|---|---|
-| Employer | `GET`, `PUT /api/v1/employer/company` (company profile; `is_listed` and `slug` are never accepted from the client) | employer | user | web | 9 |
-| Public | `GET /api/v1/public/companies/:slug` (404 until the name is changed from the default) | anyone | anon | web, app | 9 |
+| Employer | `GET`, `PUT /api/v1/employer/company` (company profile; `is_listed`, `slug`, `id` and the logo are never accepted from the client) | employer | user | web | 9 (built) |
+| Public | `GET /api/v1/public/companies/:slug` (404 until the name is changed from the default; returns only the allowlist in section 6.3) | anyone | anon | web, app | 9 (built) |
 | Public | `GET /api/v1/public/jobs` (search, filters, cursor paging) | anyone | anon | web SEO pages, app | 11 |
 | Public | `GET /api/v1/public/jobs/:id` | anyone | anon | web, app | 11 |
 | Public | `GET /api/v1/public/app-config` (minimum supported app version, notice) | the app | none | app force-update | 24 |
@@ -360,7 +363,17 @@ How the website signs people in, and what it never does.
 - **Sign-up** offers only "seeker" and "employer". A `?role=` link preselects one of those two and nothing else. The shared zod schema, the service and the form all refuse any other value, and the database signup trigger turns anything but `employer` into `seeker` and never creates an admin (proved against real Supabase). Admin is created only with the service role.
 - **Email codes.** Sign-up confirmation and password reset use a 6-digit code emailed by Supabase (valid 15 minutes), not links. Reset verifies the code, then sets the new password. A new code can be requested after a 30 second wait. Messages are fixed friendly text: a wrong password and an unknown address look the same, password reset says the same thing for every address, and sign-up never says "already registered".
 - **Never in the page or the logs.** Passwords live only in the password field and go straight to Supabase over HTTPS. They are never put in text, URLs, logs or sent to the HealthHyr API. Nothing calls `console`.
-- **Known gap, closed in step 10b:** the Supabase session sits in the browser's local storage (the library default), so a script injected into the site could read it. The site sets no security headers or Content-Security-Policy yet. Step 10b adds them as its own commit, before the first public route (section 11 and `docs/SECURITY.md`).
+- **Known gap, closed in step 10b:** the Supabase session sits in the browser's local storage (the library default), so a script injected into the site could read it. The site sets no security headers or Content-Security-Policy yet. Step 10b adds them as its own commit, before the first public route that lists jobs (section 11 and `docs/SECURITY.md`). The public company page from step 9 is the one public page that exists before 10b; it renders only plain text, shows no scripts of its own and no images, and is `noindex`.
+
+## 6.3 Company profile and the public company page (step 9)
+
+- **Employer side.** `GET` and `PUT /api/v1/employer/company`, employers only (a seeker or admin gets 403, no token 401). A save replaces the seven editable fields (name, description, website, industry, size, city, state); a field left out is cleared. The body is validated by one shared strict zod schema, so `is_listed`, `slug`, `id`, `employer_id`, the logo and any unknown field are refused with 400 and nothing is saved. The website must be an http or https address, text has length limits, size comes from a list (1-10, 11-50, 51-200, 201-500, 501-1000, 1000+), and empty boxes become null. The logo is not editable yet: uploads arrive with step 18.
+- **Ownership, two layers.** The database refuses any row that is not the caller's (RLS on the per-request client that carries their token). The code also filters every query by the caller's own id from the verified token, never an id from the request. If the database saves nothing, the answer is 404 and nothing was created. Tests cover both layers, including a run with RLS switched off, so the code-level check holds on its own.
+- **Public side.** `GET /api/v1/public/companies/:slug`, no sign-in, anon client. It returns **only** an explicit allowlist, built field by field: `companyName`, `description`, `website`, `logoUrl`, `industry`, `companySize`, `city`, `state` (`PUBLIC_COMPANY_FIELDS` in shared). Never the id, the slug, the listing flag or any other column. A test fails if any other field appears, including a column added to the table later. The website is passed on only if it is a real http or https address.
+- **404 until renamed.** A company still on the default name has no slug and is not listed, so every address answers 404, identical to a company that does not exist. A company renamed back to the default is hidden again (the route asks for `is_listed` itself as well as relying on RLS). The slug is created once, when the name first changes, and never changes after that: later renames keep it, and the page follows the new name.
+- **Addresses.** A slug is lowercase letters, digits and single hyphens (at most 160). Anything else is a plain 404 without asking the database.
+- **Web.** `/company` in the employer area (load, validate, save, with every state: loading, load error with retry, busy, field errors, server errors, saved with a link to the public page). `/companies/[slug]` renders the allowlist as plain text; no logo is shown yet; the website is shown as a link only if it is a real http or https address (checked again on the page, because the database lets an employer write that column directly, section 5.3); the page is `noindex` until step 12. An API that is down is an error, not a 404.
+- **Real-Data-API proof.** The integration tests run all of this, and row-level security itself, through the real Data API with real Supabase Auth tokens: a user sees only their own profile, cannot read or change another company by calling the Data API directly, cannot set `is_listed`, `slug` or `role`, a forged token is refused, and the private schema is unreachable.
 
 ## 7. Mobile app design (adjusted)
 
@@ -423,7 +436,7 @@ Built across steps 9, 11, 12 and 22, and checked again in step 36. The security-
 - Expired or closed jobs: 200 with `noindex`, a "no longer accepting applications" notice, no JSON-LD, and removal from the sitemap.
 - Canonical URLs: `/jobs/{slug}-{id}` and `/companies/{slug}`, with a redirect from a wrong slug. Filtered search URLs canonicalize to `/jobs`.
 - Sitemap: published, non-expired jobs, listed companies, indexable static pages (Terms and Privacy only once final).
-- robots: disallow `/dashboard`, `/messages`, `/api`. Seeker profiles have no public pages. The sign-in, sign-up, forgot-password and signed-in pages already carry `noindex` (step 8).
+- robots: disallow `/dashboard`, `/messages`, `/api`. Seeker profiles have no public pages. The sign-in, sign-up, forgot-password and signed-in pages already carry `noindex` (step 8), and so does the company page (step 9) until step 12.
 - Revalidate affected pages when a job is published, expires, closes or reopens.
 - **(adjusted)** A job page shows an Apply button for seekers on the web. Once the app is published, it also shows store links; until then, no store badge or "get the app" claim appears.
 
@@ -431,20 +444,20 @@ Built across steps 9, 11, 12 and 22, and checked again in step 36. The security-
 
 | Item | What it means here | Step | Tests |
 |---|---|---|---|
-| **Per-page title and description** | A unique `<title>` (about 60 characters) and meta description (about 155) on every public page, built from real data with a fixed pattern (for example "{Job title} at {Company} in {City}, {State} | HealthHyr"). No empty or duplicate titles. | 9 (company), 11, 12, 22 | A test renders each public route's metadata, fails on empty, missing or over-long values, and fails if two sample routes would produce the same title |
+| **Per-page title and description** | A unique `<title>` (about 60 characters) and meta description (about 155) on every public page, built from real data with a fixed pattern (for example "{Job title} at {Company} in {City}, {State} | HealthHyr"). No empty or duplicate titles. | 9 (company title, built), 11, 12, 22 | A test renders each public route's metadata, fails on empty, missing or over-long values, and fails if two sample routes would produce the same title |
 | **Canonical URLs** | One canonical per page, absolute URL, pointing at the clean path; filtered and paged search canonicalize as above; wrong slug redirects. | 11, 12 | Canonical and redirect tests |
 | **Open Graph and Twitter cards** | `og:title`, `og:description`, `og:url`, `og:type`, `og:site_name`, `og:image` and `twitter:card` (summary or large image) on every public page. The image is a plain brand image or a generated card from real fields, never a fake logo or screenshot. | 12, 22 | Metadata test checks the tags and that the image URL is absolute and exists |
 | **JSON-LD: JobPosting** | As in 8.1, with only fields we actually have; omitted when a field is missing, never invented. | 12 | Field tests; absent on expired and closed jobs |
-| **JSON-LD: Organization** | On company pages and the home page: name, URL, logo only if the employer uploaded one, `sameAs` only if supplied. Never ratings, review counts, awards or verification. | 9 (company), 12 | Field tests; fails if a banned property appears |
+| **JSON-LD: Organization** | On company pages and the home page: name, URL, logo only if the employer uploaded one, `sameAs` only if supplied. Never ratings, review counts, awards or verification. | 12 | Field tests; fails if a banned property appears |
 | **JSON-LD: BreadcrumbList** | Home → Jobs → job, and Home → Companies → company, matching the visible breadcrumb. | 12 | Structure and URL tests |
 | **JSON-LD safety** | Serialized with `<` escaped so text from users cannot close the script tag; rendered only through one helper that carries the CSP nonce (step 10b). | 12 | Escaping test with hostile text |
-| **No "verified" claims** | Banned phrases scanned across web copy, metadata, structured data, sitemap and later app and store text. | 12 and 36 | Banned-phrase scan (full scan at 36, earlier scans added as pages appear) |
-| **`noindex` for expired jobs and private pages** | Expired or closed jobs, sign-in, sign-up, reset, dashboards, seeker pages, admin, drafts of Terms and Privacy, and any page without real content (such as a company page still on the default name, which is a 404 anyway). | 8 (done), 9, 11, 12, 22 | Each page type tested for the right robots meta and status |
+| **No "verified" claims** | Banned phrases scanned across web copy, metadata, structured data, sitemap and later app and store text. | 12 and 36 | Banned-phrase scan (full scan at 36, earlier scans added as pages appear; the company page test already checks for such words) |
+| **`noindex` for expired jobs and private pages** | Expired or closed jobs, sign-in, sign-up, reset, dashboards, seeker pages, admin, drafts of Terms and Privacy, and any page without real content (such as a company page still on the default name, which is a 404 anyway). | 8 (done), 9 (company page, done), 11, 12, 22 | Each page type tested for the right robots meta and status |
 | **Sitemap and robots** | `sitemap.ts` lists only indexable URLs with real `lastmod` dates; split by type if it grows past 50,000 URLs. `robots.ts` points to the sitemap and disallows private paths. | 12 | Sitemap content tests (no expired, no unlisted, no drafts); robots test |
-| **Images** | `next/image` with explicit width and height, modern formats, lazy loading below the fold, descriptive `alt` text for content images and empty `alt` for decoration. No layout shift from images. | 9, 22 | Component tests for alt text and dimensions; a source rule against raw `<img>` in `apps/web/src` |
+| **Images** | `next/image` with explicit width and height, modern formats, lazy loading below the fold, descriptive `alt` text for content images and empty `alt` for decoration. No layout shift from images. | 18, 22 | Component tests for alt text and dimensions; a source rule against raw `<img>` in `apps/web/src` (the company page shows no image until uploads exist) |
 | **Fonts** | Manrope and DM Sans through `next/font` (self-hosted, no render-blocking request), only the weights used, `display: swap`, size-adjusted fallback. | 3 (done), 36 | Existing font test; a check that no other font file or request is added |
 | **Core Web Vitals** | Targets on a mid-range phone and a throttled connection: LCP under 2.5 s, INP under 200 ms, CLS under 0.1. Public pages are server-rendered, ship little client JavaScript, and avoid layout shift (reserved space, skeletons). Measure with Lighthouse in CI or by hand and a field check after launch. | 11, 12, 36 | Lighthouse or equivalent run on the main public pages with budgets (new tool, ask the owner first) |
-| **Rendering and the CSP** | A per-request nonce (step 10b) can turn static pages into per-request renders. Step 10b measures this on the public pages and picks the approach (see `docs/SECURITY.md`) so SEO pages stay fast and cacheable. | 10b, 11 | Header tests plus a cache and speed check |
+| **Rendering and the CSP** | A per-request nonce (step 10b) can turn static pages into per-request renders. Step 10b measures this on the public pages and picks the approach (see `docs/SECURITY.md`) so SEO pages stay fast and cacheable. The company page is already rendered on request (it fetches with no cache), so it is a good first measurement. | 10b, 11 | Header tests plus a cache and speed check |
 | **Internal links and breadcrumbs** | Real `<a href>` links between jobs, companies and search; no links that need JavaScript to exist; a visible breadcrumb matching the JSON-LD. | 11, 12 | Link tests on rendered pages |
 | **Search Console and Bing Webmaster Tools** | After launch: verify the domain by DNS, submit the sitemap, watch coverage, structured-data and Core Web Vitals reports, and fix errors. Owner action; no code needed except the sitemap. | After launch 1 | None (manual) |
 | **Not indexable on purpose** | Seeker profiles, messages, applications, anything behind sign-in. | 8 (done), 19, 20 | `noindex` tests per area |
@@ -520,7 +533,7 @@ No ads, no tracking across other apps, no precise location, no contacts access.
 
 ## 11. Build steps (one commit each, tests passing first) (adjusted)
 
-Steps 0 to 8 are done. The rest is reordered into three phases: the web employer flow and public SEO pages first, then the seeker app, then the Pro directory search. Seeker features on the web (minimal) are in phase A2 because employers need applicants to manage and the public pages need an Apply button. **Step 10b (security headers and a Content-Security-Policy) is its own commit and lands before the first public route in step 11.** It keeps the number 10b so steps 11 to 36 keep theirs.
+Steps 0 to 9 are done. The rest is reordered into three phases: the web employer flow and public SEO pages first, then the seeker app, then the Pro directory search. Seeker features on the web (minimal) are in phase A2 because employers need applicants to manage and the public pages need an Apply button. **Step 10b (security headers and a Content-Security-Policy) is its own commit and lands before the first public route in step 11.** It keeps the number 10b so steps 11 to 36 keep theirs.
 
 | # | Commit | Tests | Status |
 |---|---|---|---|
@@ -534,8 +547,8 @@ Steps 0 to 8 are done. The rest is reordered into three phases: the web employer
 | 7 | API skeleton: env validation, JWT auth, `requireRole`, errors, rate limit, helmet, CORS, reserved webhook route, client design rule | 113 API tests (supertest, boot, scanner) and 9 against real Supabase tokens | done |
 | **Phase A1: web, employer flow, public SEO pages, payments** | | | |
 | 8 | **Move the API to `/api/v1` and update commit 7's tests**, add the per-user rate limit. Web auth: sign in and up (employer and seeker), emailed codes, password reset, role routing from the API, protected layouts. | Every existing API test passes on the new paths; `/api/me` is 404; the webhook path is unchanged; role comes from the profile, never the client; each web flow, role routing and the signed-out view; 12 web flows against real Supabase Auth, mail catcher and the real API app | done |
-| 9 | Turn on the Supabase Data API locally (PostgREST image, about 6.5 MB compressed). Add the anon client. Employer company profile (`GET`, `PUT /api/v1/employer/company`, form in the employer area) and the public company route and page (`GET /api/v1/public/companies/:slug`, `/companies/[slug]`, `noindex` until step 12) | 404 until renamed from the default, slug stable after later renames; an employer edits only their own profile (RLS plus an ownership check in code) and a stranger, another employer and anon are refused; `is_listed` and `slug` never accepted from the client; **end-to-end test that a per-request client with the user's token has RLS applied, against the real Data API**; component tests for the form and the public page | |
-| 10 | Jobs: draft CRUD, employer dashboard, close and reopen | Reopen rules, employers cannot set status or dates | |
+| 9 | Local Supabase Data API on (PostgREST, `schemas = ["public"]`). The anon client. Employer company profile (`GET`, `PUT /api/v1/employer/company`, `/company` form) and the public company route and page (`GET /api/v1/public/companies/:slug` returning only the eight-field allowlist, `/companies/[slug]`, `noindex` until step 12). Section 6.3 | 404 until renamed from the default, slug stable after later renames; an employer edits only their own profile (RLS plus an ownership check in code, also proved with RLS switched off) and a stranger, another employer, a seeker and anon are refused; `is_listed`, `slug`, `id` and the logo never accepted; a test fails if any field outside the allowlist appears; **RLS applied to a per-request client with the user's token, against the real Data API (22 tests)**; component tests for the form and the public page | done |
+| 10 | Jobs: draft CRUD, employer dashboard, close and reopen. Decide with the owner whether the database CHECK constraints (section 5.3) land here | Reopen rules, employers cannot set status or dates | |
 | **10b** | **Security headers and a nonce-based Content-Security-Policy for the web app**, as its own commit before the first public job route: HSTS, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, `frame-ancestors`, and a per-request nonce. Includes measuring the effect of per-request nonces on the cacheability of public pages and choosing the approach (`docs/SECURITY.md`). CI workflow, `npm audit` and Dependabot are proposed here, with the owner's approval first | Headers present on pages and error pages; nonce changes per request and is on every script; no `unsafe-inline` or `unsafe-eval` in production; source rule against `dangerouslySetInnerHTML` and `innerHTML`; sign-in still works under the policy (real browser check in report-only first) | |
 | 11 | `0002_job_search`; public jobs API; search and detail pages (list left, detail right) | Expired, unpublished and unlisted jobs never returned; search and filter correctness | |
 | 12 | SEO: JSON-LD, canonical, sitemap, robots, Open Graph and Twitter cards (section 8.2) | JSON-LD fields, expired noindex, metadata tests | |
@@ -569,7 +582,7 @@ Steps 0 to 8 are done. The rest is reordered into three phases: the web employer
 
 Old to new step numbers: old 9 split into new 9 (Data API, company page) and 18 (seeker profile); old 10 to 14 became 9 to 12 and 13; old 15 to 18 became 14 to 17; old 19 and 20 became 19; old 21 is 21; old 22 to 25 became 22; old 26 is 33; old 27 is 23; old 28 is 36. Step 10b was added on 2026-10-16.
 
-Storage (resume uploads) is turned off in `supabase/config.toml` and gets turned on in step 18. The Data API (PostgREST) is turned off and gets turned on in step 9.
+Storage (resume uploads) is turned off in `supabase/config.toml` and gets turned on in step 18. The Data API (PostgREST) has been on since step 9.
 
 ### 11.1 Launch sequence (recommended)
 
@@ -589,7 +602,7 @@ Rules that keep it that way:
 
 ## 12. Tests
 
-`npm test` runs everything: **775 tests** after step 8 (345 in the `node` project, 250 website component tests in jsdom, 158 RLS, 22 against real Supabase). `npm run test:fast` runs the `node` and `web-components` projects only (595 tests) and needs no Docker. Counts per suite are in `npx vitest list`. `docs/SECURITY.md` section 5 lists the security tests each later step must add.
+`npm test` runs everything: **986 tests** after step 9 (483 in the `node` project, 301 website component tests in jsdom, 158 RLS, 44 against real Supabase). `npm run test:fast` runs the `node` and `web-components` projects only (784 tests) and needs no Docker. Counts per suite are in `npx vitest list`. `docs/SECURITY.md` section 5 lists the security tests each later step must add.
 
 ### RLS tests (step 6): 158 tests in 7 suites, against the real local database
 
@@ -609,9 +622,9 @@ Rules that keep it that way:
 
 `npm run test:rls:mutation` weakens one policy, guard, grant or function at a time (inside each test's own transaction, so nothing real changes) and checks that the right tests fail. 16 weakenings are caught. Two more confirm defense in depth: widening a column privilege alone is not noticed because a trigger still blocks the write, and removing both is. New migrations (0002 to 0004) add their own RLS tests and mutation entries.
 
-### API tests (steps 7 and 8): 127 unit and process tests, plus 22 against real Supabase
+### API tests (steps 7 to 9): 201 unit and process tests, plus 44 against real Supabase
 
-All run on `/api/v1/...` paths. The Stripe webhook keeps `/api/webhooks/stripe`.
+All run on `/api/v1/...` paths. The Stripe webhook keeps `/api/webhooks/stripe`. The unit tests use a stand-in database (`tests/helpers/harness.ts`) that answers the way row-level security would, returns whole rows on purpose (so a route that forgets to pick fields is caught), and records every query.
 
 | Suite | Tests | Covers |
 |---|---|---|
@@ -622,26 +635,31 @@ All run on `/api/v1/...` paths. The Stripe webhook keeps `/api/webhooks/stripe`.
 | `security` | 18 | helmet headers; CORS allowlist (allowed, refused, preflight, no wildcard, no Origin); per-IP rate limit 429 with Retry-After, counts failures, health not throttled; per-user limit: 429 for one signed-in user, a separate counter for every person even from one IP, not used up by requests that fail authentication, separate from the per-IP limit |
 | `webhook` | 13 | Raw body byte for byte (including non-ASCII), parsed everywhere else, no sign-in, not throttled, no origin check, POST only, 1 MB limit, reserved 501 handler, path unchanged by versioning |
 | `versioning` | 7 | The prefix is `/api/v1`; `/api/me` and the other old `/api/...` paths answer 404 with and without a token; no other versions exist; health and the webhook are unversioned |
+| `company` | 74 | **Employer routes:** no token 401, seeker and admin 403 with no data touched; reads own company only, never the id; named columns only; 404 without a row; generic 500; saves the seven fields; only those seven columns reach the database, filtered to the caller's id; rename lists the page and keeps the slug; empty boxes become null; omitted fields are cleared; every validation case refused with a friendly message and nothing saved; every size accepted; `is_listed`, `isListed`, `slug`, `id`, `employer_id`, the logo, `role` and unknown fields refused. **Stranger refused:** employer B never changes A (body, URL or query naming A's id), every query filtered to the caller's own id, and the same with RLS switched off. **Public route:** no sign-in needed (a bad token is ignored), exact eight-field allowlist, a test that fails on any other field including columns added later, named columns only, a website that is not http or https is dropped, 404 for the default name, for a company renamed back, and when RLS is off (identical answer to a missing company), slug stable after renames, malformed addresses are a 404 without a database call, only GET, unknown `/public` paths are 404 not 401, per-IP limit applies |
 | `service-role-scan` | 17 | The scanner catches each kind of violation, accepts only an allow comment with a reason, and the real source (including `routes/v1/`) is clean |
 | `boot` | 3 | The real server process exits with code 1 on missing or live-key config without printing a value, and starts with valid config, serves `/health`, answers 401 on `/api/v1/me` and 404 on the old `/api/me` |
 | `integration/real-supabase-token` (real Supabase) | 10 | A token issued by real GoTrue (after the emailed-code confirmation) is signed ES256 with the expected issuer and audience; our verifier accepts it, refuses altered signature and payload, the wrong issuer or audience, and the project's own anon key; signup with `role: admin` in its metadata still creates a `seeker`; `/api/v1/me` returns the database role; `/api/me` is 404 |
-| `integration/web-auth` (real Supabase) | 12 | The website's real auth code, against real GoTrue, the local mail catcher and the real API app: signed-out start; employer and seeker sign-up with the emailed code and the API's role; wrong code refused; admin requested straight to Supabase still yields `seeker`; sign-in, wrong password, unknown address, sign-out; password reset with the emailed code (new password works, old one does not, unknown address looks the same, wrong code changes nothing) |
+| `integration/web-auth` (real Supabase) | 12 | The website's real auth code, against real GoTrue, the local mail catcher, the real Data API and the real API app: signed-out start; employer and seeker sign-up with the emailed code and the API's role; wrong code refused; admin requested straight to Supabase still yields `seeker`; sign-in, wrong password, unknown address, sign-out; password reset with the emailed code |
+| `integration/data-api` (real Supabase) | 22 | **Row-level security through the real Data API** with real tokens: anon cannot read profiles; a user sees only their own profile; another user's profile or company by id returns nothing; a default-named company is visible only to its owner; direct PATCH of another user's company changes nothing; `is_listed`, `slug`, `id` and `role` cannot be set; the `private` schema is not reachable; a forged token gets 401. **Through the API:** `/me` as the caller; employer routes refuse no token, a seeker and a forged token; B saves without touching A; fields the server decides are refused; the public page is a 404 for a default-named or missing company (identical answer), shows exactly the eight allowed fields, the slug survives renames, hiding and showing again work, a `javascript:` website written straight to the Data API never reaches the page; anon reads only listed companies and cannot write |
 
-### Website auth tests (step 8): 250 component tests, plus the shared schemas
+### Website tests (steps 8 and 9): 301 component tests, plus the shared schemas
 
 | Suite | Tests | Covers |
 |---|---|---|
 | `lib/auth-service` | 45 | The state machine: loading, signed out, signed in, no profile, error; role only from the API whatever the token says; refresh once on 401; friendly error mapping (no raw provider text); form validation before anything is sent; sign-up refuses admin and any other role; session changes from another tab |
 | `lib/auth-helpers` | 40 | Role homes, `next` path safety (open redirects, backslashes, control characters, protocol-relative), error mapping table |
-| `lib/api-client` | 8 | `/api/v1` prefix, bearer token, no cookies, no token means no request, response validated, network and server errors mapped |
+| `lib/api-client` | 25 | `/api/v1` prefix, bearer token, no cookies, no token means no request, response validated, network and server errors mapped, error issues kept and capped; the company profile read and save (PUT with a JSON body); the public client sends no token, drops fields outside the allowlist, treats 404 as "no such page" but other failures as errors, never asks for a malformed slug |
 | `lib/public-env` | 8 | Missing or malformed variables named; refuses a secret or service-role key |
 | `components/auth-guards` | 26 | `RequireRole` and `RedirectIfSignedIn`: nothing protected renders while loading or on the server, redirect for signed-out visitors with a safe `next`, each role sent to its own home, no profile and error screens, retry |
 | `components/sign-in` | 21 | Labels, required fields, autocomplete, empty and malformed input, busy state (disabled, `aria-busy`, announced spinner), no double submit, one friendly error for wrong credentials, friendly rate-limit and network messages, password never in text, role routing per role and `next`, unconfirmed account goes to the code step |
 | `components/sign-up` | 22 | Only seeker and employer offered and never "admin", `?role=` preselect, tampered radio value still sends a valid role, empty form errors, busy state, neutral "could not create" message, code step (format, wrong code, resend wait, role from the API wins), session-at-once path |
 | `components/forgot-password` | 14 | Request code with one message for every address, rate limit, code and new password step, wrong code leaves the password alone, success routes by API role, change failure signs out, resend wait, password never in text |
 | `components/protected-pages` | 11 | The employer, seeker and admin pages: a signed-out visitor sees only a spinner and is sent to sign-in; the right role sees the page; the other roles see nothing and are sent to their own home; signing out from a protected page; all account and auth pages carry `noindex` |
+| `components/company-form` | 25 | Loading spinner, saved values shown, link to the public page, load error with Try again, 404 message; labelled fields and the size list, no logo or listing field; validation (name, https website, description length) with focus and nothing sent; saving sends only the editable fields with empty boxes as null; busy state and no double submit; public and hidden notices; server field errors; friendly network and server messages that never show the server's words; the page in the employer area: signed-out visitor, seeker and admin kept out and the API never asked; dashboard link |
+| `components/public-company` | 26 | What the public page shows (name as heading, location, industry, size, description, safe external link), nothing invented when fields are empty, hostile text shown as plain text, no logo shown, no controls; `safeWebsite` accepts only http and https; the route: shows the company, 404 for no public page, an API failure is an error and not a 404, metadata is `noindex` |
 | `auth-source-rules` | 12 | No `app_metadata`, `user_metadata`, token decoding, browser storage or cookies for roles; the role read from the URL only preselects the sign-up radio; only `backend.ts` calls Supabase Auth; only `public-env.ts` reads `process.env`; only the API client calls `fetch`; no `console`; no server secret names; only three public variables |
 | `packages/shared` `auth-schemas` | 13 | The shared zod schemas: roles (no admin), trimming and lower-casing, password and code limits, `/me` response shape |
+| `packages/shared` `company-schemas` | 47 | The public allowlist is exactly eight fields and never the id or listing flag; the public schema strips anything else; the employer's own view adds only the listing flag and address; input normalization, required name, website schemes, sizes, limits, and every server-decided field refused; slug pattern |
 
 ### Mobile tests (steps 24 to 31, adjusted)
 
@@ -673,38 +691,38 @@ Section 7.5 describes them: Jest with `jest-expo`, Testing Library, the source g
 ### Local Supabase
 
 - Requires Docker. The Supabase CLI is a dev dependency (`npx supabase`), not a global install.
-- `npm run db:start` starts the database, auth and the mail catcher (about 2 GB of Docker images the first time). `npm run db:reset` re-applies migrations. `npm run db:stop` stops it. `npm run db:status` prints the URLs and keys.
-- **Email locally (step 8, approved by the owner).** `supabase/config.toml` turns on the local mail catcher (Mailpit, SMTP on 54324, web inbox at `http://127.0.0.1:54324`), requires email confirmation, and uses 6-digit codes valid for 15 minutes, with code-style templates in `supabase/templates/`. This matches what production must do. Tests read the emailed codes from the catcher's API (`tests/support/mailpit.ts`), so no real email is ever sent locally. The Data API and storage stay off until steps 9 and 18.
+- `npm run db:start` starts the database, auth, the Data API and the mail catcher (about 2 GB of Docker images the first time). `npm run db:reset` re-applies migrations. `npm run db:stop` stops it. `npm run db:status` prints the URLs and keys. Note that `supabase start` itself prints the local keys when it finishes; they are the standard local-only demo keys, but do not paste that output anywhere public.
+- **Data API (step 9, approved by the owner).** `supabase/config.toml` turns on PostgREST (`[api] enabled = true`, `schemas = ["public"]`, `max_rows = 1000`). Only the HealthHyr API calls it, always with the caller's own token (or the anon key for public reads); the browser never does. The private schema is not exposed.
+- **Email locally (step 8, approved by the owner).** `supabase/config.toml` turns on the local mail catcher (Mailpit, SMTP on 54324, web inbox at `http://127.0.0.1:54324`), requires email confirmation, and uses 6-digit codes valid for 15 minutes, with code-style templates in `supabase/templates/`. This matches what production must do. Tests read the emailed codes from the catcher's API (`tests/support/mailpit.ts`), so no real email is ever sent locally. Storage stays off until step 18.
 - `npm test` runs everything, including the RLS and integration suites, and fails with instructions if the database or the mail catcher is not running. `npm run test:fast` skips them.
 - Supabase Auth limits sign-in and sign-up to about 30 per 5 minutes per IP. Running the integration suites many times in a row can hit that and fail with a rate-limit message; wait a few minutes.
 - Ports 54321 to 54329, so it does not clash with other local Postgres, Redis or MinIO containers.
 
 ### Running the API and the website locally (to try sign-up yourself)
 
-**Needs step 9 first.** `GET /api/v1/me` reads the profile through the Data API, which is off until step 9. Before then, sign-up and the emailed code work, but the site cannot load the account afterwards.
+Since step 9 this works end to end: sign up, confirm the emailed code, land on your home page, and (as an employer) edit your company profile and open its public page.
 
 1. Start Docker Desktop, then `npm run db:start`.
-2. `npm run db:status` prints the local URL and keys. Copy values from it into two git-ignored files (never paste keys into chat or commit them):
-   - `apps/api/.env`: `NODE_ENV=development`, `PORT=4000`, `SUPABASE_URL=http://127.0.0.1:54321`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, plus a Stripe **test** key and webhook secret if the API asks for them at boot. The default CORS list already allows `http://localhost:3000` and `http://127.0.0.1:3000`.
-   - `apps/web/.env.local`: `NEXT_PUBLIC_API_BASE_URL=http://localhost:4000`, `NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (the publishable key only).
-3. In one terminal: `npm run dev -w @healthhyr/api`. In another: `npm run dev -w @healthhyr/web`.
+2. The two git-ignored env files were created from the local Supabase in step 9 (no key was displayed or committed): `apps/api/.env` and `apps/web/.env.local`. The two Stripe values in `apps/api/.env` are clearly named placeholders: the word "devplaceholderuntilstep15" after the usual Stripe test prefixes. They only need to look like Stripe test values for the API to boot. Replace them with real Stripe **test** keys at step 15. If either file is missing, recreate it from `npm run db:status` using the variable names in section 13 (the web file holds the publishable key only).
+3. In one terminal: `npm run dev -w @healthhyr/api` (port 4000). In another: `npm run dev -w @healthhyr/web` (port 3000).
 4. Open `http://localhost:3000/sign-up`, create an account, then read the 6-digit code in the mail catcher at `http://127.0.0.1:54324` and enter it.
 5. Use `http://localhost:3000` consistently (not a mix of `localhost` and `127.0.0.1`), so the browser origin matches the CORS list.
+6. As an employer, open `http://localhost:3000/dashboard`, then "Edit company profile". After renaming the company from "My company", the form shows a link to the public page at `/companies/<address>`.
 
 Other notes:
 
 - `npm run start -w @healthhyr/api` runs the API without watch mode.
 - The server logs one JSON line per event. `PORT=0` picks a free port (not allowed in production).
 
-## 14. What this plan will install (step 8 added one package)
+## 14. What this plan will install (step 9 added one Docker image and no packages)
 
-Step 8 added `@supabase/supabase-js` to `apps/web` (the website's sign-in client, approved before install). Nothing else was installed.
+Step 8 added `@supabase/supabase-js` to `apps/web` (the website's sign-in client, approved before install). Step 9 pulled one Docker image (PostgREST v16.4: 6.5 MB compressed, 27.1 MB on disk) and installed no npm package. Nothing else was installed.
 
 Sizes are npm's unpacked size for the package itself. Each package also brings dependencies, and the React Native tree in particular adds a few hundred megabytes to `node_modules`. Each install gets its own approval request at the step where it is needed.
 
 | Step | Package | Size | Why |
 |---|---|---|---|
-| 9 | Docker image: PostgREST (the Data API), no npm package | 6.5 MB compressed (newest tag in Supabase's public registry; the CLI pins its own version) | RLS through the per-request client, end to end |
+| 9 (done) | Docker image: PostgREST (the Data API), no npm package | 6.5 MB compressed, 27.1 MB on disk | RLS through the per-request client, end to end |
 | 10b | Possibly CI, `npm audit` and Dependabot configuration (repository files and GitHub settings, no npm package) | none | Supply-chain checks. Owner approves before they are added |
 | 13, 15 | `stripe` 23.0.0 | 16.5 MB | Checkout sessions, webhook signature check, refunds (API) |
 | 16 | `nodemailer` 10.1.2, `@types/nodemailer` | 1.6 MB, 0.1 MB | Zoho SMTP alerts (API) |
@@ -776,9 +794,16 @@ Decided after step 8 (owner, 2026-10-16):
 24. The anon client lands in step 9 with the public company route (it was planned for step 11). Step 9 also adds the end-to-end test that a per-request client with the user's token has RLS applied through the real Data API.
 25. `docs/SECURITY.md` (threat model and pre-launch checklist, with which items are covered by tests and which need new ones), `docs/ARCHITECTURE.md`, and the SEO checklist in section 8.2 are part of the plan. Launch 1 needs every box in the security checklist ticked.
 
+Decided for step 9 (owner, 2026-10-16):
+
+26. The local Data API (PostgREST image) is on, with the `public` schema only. The two local env files are written from the local Supabase without displaying keys, and the Stripe values are clearly named placeholders until step 15.
+27. **The public company route returns only an explicit allowlist** (company name, description, website, logo, industry, size, city, state), never the id, and a test fails if any other field appears (section 6.3).
+28. The logo is not editable by employers until uploads exist (step 18); the public page does not show a logo yet.
+
 Still open:
 
 - **Google Play account type (personal or organization).** To be decided before Phase B (before step 24). If personal, start recruiting the 12 testers two weeks before the planned launch (owner decision). Planning note: that is the minimum, because the 14-day clock needs a closed-test build and 12 opted-in testers, and Google then reviews the production access request, so the plan keeps the app launch about four weeks after the first closed-test build and aims for 15 to 20 testers (section 10.3).
 - **Apple account type** (individual or organization), which affects how the developer name appears in the store.
 - **Per-request nonce versus cacheable public pages** (step 10b): decided with measurements at that step (`docs/SECURITY.md`).
 - **CI, error monitoring, uptime check and a performance tool:** each adds a tool or service, so each needs the owner's approval before it is added (section 14).
+- **Database CHECK constraints for rules the API enforces but a direct Data API write can bypass** (website must be http or https, text lengths, company size list) (section 5.3). Which step adds them is the owner's call; step 10 is recommended.

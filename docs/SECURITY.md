@@ -1,6 +1,6 @@
 # HealthHyr v2 security: threat model and pre-launch checklist
 
-Status as of step 8 (2026-10-16). This file is a plan and a checklist, not a claim that anything is "secure". Nothing here has had an outside review. Each row says what is already enforced by a test, what still needs one, and what can only be checked by a person. Update it in the same commit as the change it describes. `docs/PLAN.md` says when each item is built.
+Status as of step 9 (2026-10-16). This file is a plan and a checklist, not a claim that anything is "secure". Nothing here has had an outside review. Each row says what is already enforced by a test, what still needs one, and what can only be checked by a person. Update it in the same commit as the change it describes. `docs/PLAN.md` says when each item is built.
 
 Test status words used below:
 
@@ -23,19 +23,24 @@ Test status words used below:
 
 | Threat | Example | Main controls | Test status |
 |---|---|---|---|
-| **Role escalation** | Sign up as admin; edit own `role`; forge a token | Signup trigger never creates admin; role read from the database on every request; column privileges and guard triggers; only asymmetric JWTs accepted | **Covered**: RLS suites, mutation runner, 32 API auth tests, web source rules, 12 real-Supabase web flows |
-| **Reading another person's data** | An employer reading a seeker's phone; a stranger reading an application | Row-level security on every table; per-request client carries the user's own token; ownership checks in code where the service role is needed | **Covered** by RLS tests. The end-to-end "RLS applies through the real Data API" test is **Needs test** (step 9) |
+| **Role escalation** | Sign up as admin; edit own `role`; forge a token | Signup trigger never creates admin; role read from the database on every request; column privileges and guard triggers; only asymmetric JWTs accepted | **Covered**: RLS suites, mutation runner, 32 API auth tests, web source rules, real-Supabase flows, and (step 9) a direct `PATCH role` through the real Data API is refused |
+| **Reading another person's data** | An employer reading a seeker's phone; a stranger reading an application | Row-level security on every table; per-request client carries the user's own token; ownership checks in code where the service role is needed | **Covered** by RLS tests and, since step 9, by tests through the **real Data API** with real tokens (own profile only; another user's profile and company return nothing; anon reads nothing private; a forged token is refused) |
+| **Changing another person's data** | Employer B editing employer A's company | RLS on the per-request client, plus the code filtering every query by the caller's own id | **Covered** (step 9): unit tests including RLS switched off, and real Data API tests including direct `PATCH` |
+| **Direct Data API writes skip API validation** | A signed-in employer sends `PATCH employer_profiles` with their own token and a `javascript:` website or a huge description, bypassing the API's checks | Column privileges and RLS still stop other rows and server-decided columns. Public output is re-checked on the way out (website must be http or https, in the API route and again on the page). Planned: database CHECK constraints for the same rules | Output checks **Covered** (step 9, real Data API test). CHECK constraints **Needs test** (migration, step to be chosen; recommended step 10) |
 | **Seeker directory leak** | Opted-out seekers or contact fields appearing in employer results | Opt-in AND active Hiring Pro in the database; explicit column allowlist | **Covered** at the database (RLS); the API route is **Needs test** (step 35) |
+| **Public pages leaking fields** | The public company page exposing the owner's id or a column added later | Responses built field by field from an explicit allowlist (`PUBLIC_COMPANY_FIELDS`) | **Covered** (step 9): a test fails if any other field appears, including a column added to the table |
 | **Using the service role by mistake** | A route that skips RLS | `service-role-scan` test: allow comment with a reason, key named only in `env.ts`, `server.ts` and `serviceClient.ts` | **Covered** |
 | **Plan limits bypassed from the UI** | Calling the API directly | Every limit enforced on the server and in SQL functions | **Covered** for what exists; **Needs test** per step (13 to 17, 34) |
-| **Token theft by script injection (XSS)** | An injected script reads the session from local storage | React escaping; no `dangerouslySetInnerHTML`; nonce-based CSP; no user HTML anywhere | CSP is **Needs test** (step 10b). A source rule banning `dangerouslySetInnerHTML` is **Needs test** (step 10b) |
+| **Token theft by script injection (XSS)** | An injected script reads the session from local storage | React escaping; no `dangerouslySetInnerHTML`; nonce-based CSP; no user HTML anywhere | Plain-text rendering of hostile text is **Covered** on the company page (step 9). CSP is **Needs test** (step 10b). A source rule banning `dangerouslySetInnerHTML` is **Needs test** (step 10b) |
 | **Clickjacking, content sniffing, referrer leaks** | Site framed by another site | `frame-ancestors`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy` | API helmet defaults **Covered**; web headers **Needs test** (step 10b) |
 | **Open redirect after sign-in** | `?next=https://evil.example` | `safeNextPath` accepts only same-site paths | **Covered** (40 helper tests, sign-in tests) |
-| **Account enumeration** | "That email is already registered" | Fixed friendly messages; reset says the same for every address; sign-in does not say which part was wrong | **Covered** (service, component and real-Supabase tests) |
+| **Unsafe links from user text** | A company website of `javascript:` becoming a link | Only http and https addresses become links (API drops others; page checks again; links use `rel="nofollow noopener noreferrer"`) | **Covered** (step 9) |
+| **Account enumeration** | "That email is already registered" | Fixed friendly messages; reset says the same for every address; sign-in does not say which part was wrong; a company still on the default name answers exactly like a missing one | **Covered** (service, component, real-Supabase and company route tests) |
 | **Password guessing** | Credential stuffing against sign-in | Supabase Auth rate limits; per-IP and per-user limits on our API | Our API limits **Covered**. The Supabase limits and CAPTCHA option are **Manual** (verify in the production project) |
 | **Malicious uploads** | A script renamed `resume.pdf`; huge files; path tricks | Type checked by content, size limits, server-chosen names, private bucket, 60 second signed links | **Needs test** (step 18, and the photo step if photos are added) |
 | **Forged or replayed Stripe events** | Fake "payment succeeded" | Signature check on the raw body; idempotent event table; server-side price | Raw body **Covered**; the rest **Needs test** (steps 13 to 17) |
 | **Secrets in the repo or the browser** | A key committed or bundled into the site | `.env` ignored; hygiene test scans committed text; site refuses a secret-looking key; source rules ban secret names in web code | **Covered**; GitHub secret scanning is **Manual** |
+| **Local keys shown in a terminal** | `supabase start` prints the local demo keys when it finishes | They are local-only demo values, never production. Do not paste that output anywhere public; use `npm run db:status` only in a private terminal | **Manual** |
 | **Leaky errors and logs** | Stack traces, SQL or tokens in a response or log | Single error handler; logs never include tokens; web code never calls `console` | **Covered** |
 | **Vulnerable dependencies** | A known CVE in a package | `npm audit`, Dependabot | **Needs** CI (see section 4) |
 | **Abuse of the contact form and messaging** | Spam, harassment | Rate limit, honeypot, report and block (app stores require it) | **Needs test** (steps 21, 22, 29) |
@@ -47,11 +52,14 @@ Test status words used below:
 These are tested and stay true; change them only with a plan update.
 
 1. The browser holds the publishable key only. The service-role key and the Stripe secret exist only in the API environment, and only `env.ts` reads them.
-2. User requests run as the user (per-request client with the user's token), so RLS decides. The service role is for server-only operations and carries an allow comment.
+2. User requests run as the user (per-request client with the user's token), so RLS decides. Public reads run as `anon`. The service role is for server-only operations and carries an allow comment.
 3. The role always comes from the database (API) and never from the token, metadata, storage, the URL or the client. Admin is only ever set with the service role.
 4. Plan limits are enforced on the server and in the database, never only in the UI.
 5. Passwords and codes go only to Supabase Auth over HTTPS. They are never logged, put in a URL, or sent to the HealthHyr API.
 6. Error responses are fixed friendly text with a request id. Details go to the server log only.
+7. Anything public is built from an explicit allowlist of fields, never from "the whole row".
+8. A client may not set a field the server decides (`is_listed`, `slug`, `id`, `role`, prices, statuses, dates): strict schemas refuse it and tests prove it.
+9. The Data API exposes only the `public` schema; the `private` helpers are unreachable through it (tested against the real Data API).
 
 ## 4. Pre-launch checklist (before launch 1)
 
@@ -59,10 +67,14 @@ These are tested and stay true; change them only with a plan update.
 
 ### Headers and browser protections
 - [ ] **Security headers on the web app** (step 10b): `Strict-Transport-Security` (HSTS, with a long max-age; add `includeSubDomains` only after checking subdomains; `preload` only if the owner decides), `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` (camera, microphone, geolocation and similar off), `frame-ancestors 'none'` (and `X-Frame-Options: DENY` for old browsers). Tests: **Needs test** — a test builds the header list and a request-level test checks them on a page and an error page.
-- [ ] **Nonce-based Content-Security-Policy** (step 10b): `default-src 'self'`, `script-src 'self' 'nonce-…' 'strict-dynamic'`, `style-src` as tight as Tailwind and Next allow, `connect-src` limited to the API and the Supabase project URL, `img-src` and `font-src` limited to self (and the storage host once photos exist), `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, `frame-ancestors 'none'`. A fresh nonce per request, generated in Next's request interceptor (middleware, named `proxy` in Next 16; confirm at the step) and passed to the page. **Trade-off to decide in step 10b:** a per-request nonce makes every page render on request instead of being served from a static cache. That matters for the public job and company pages (SEO and speed), so the step will measure it and propose either dynamic rendering with short revalidation at the CDN, or a hash-based policy for static pages. Tests: **Needs test** — header present with a nonce, a different nonce on each request, the nonce on every script tag, no `unsafe-inline` or `unsafe-eval` in production, a report-only run first in a real browser.
-- [ ] **No raw HTML from users**: a source rule fails on `dangerouslySetInnerHTML` and on `innerHTML` in `apps/web/src`. **Needs test** (step 10b). Job descriptions are plain text with line breaks, never HTML.
+- [ ] **Nonce-based Content-Security-Policy** (step 10b): `default-src 'self'`, `script-src 'self' 'nonce-…' 'strict-dynamic'`, `style-src` as tight as Tailwind and Next allow, `connect-src` limited to the API and the Supabase project URL, `img-src` and `font-src` limited to self (and the storage host once photos exist), `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, `frame-ancestors 'none'`. A fresh nonce per request, generated in Next's request interceptor (middleware, named `proxy` in Next 16; confirm at the step) and passed to the page. **Trade-off to decide in step 10b:** a per-request nonce makes every page render on request instead of being served from a static cache. That matters for the public job and company pages (SEO and speed), so the step will measure it and propose either dynamic rendering with short revalidation at the CDN, or a hash-based policy for static pages. The public company page (step 9) already renders on request, so it is a first measurement. Tests: **Needs test** — header present with a nonce, a different nonce on each request, the nonce on every script tag, no `unsafe-inline` or `unsafe-eval` in production, a report-only run first in a real browser.
+- [ ] **No raw HTML from users**: a source rule fails on `dangerouslySetInnerHTML` and on `innerHTML` in `apps/web/src`. **Needs test** (step 10b). Job descriptions are plain text with line breaks, never HTML. The company page already renders description and name as plain text (tested with hostile text).
 - [ ] **API headers**: helmet defaults (including HSTS, `nosniff`, `frame-ancestors` through CSP defaults) **Covered** by the existing helmet test; production TLS and HSTS at the host are **Manual**.
 - [ ] **CORS** allowlist: **Covered**. The production list is **Manual** (explicit, https only).
+
+### Database
+- [ ] **CHECK constraints** for the format and length rules the API enforces but a direct Data API write can bypass (website is http or https, text lengths, company size list), with RLS and mutation tests. **Needs test** (migration; recommended step 10, owner decides).
+- [ ] **Data API exposure** reviewed in production: only `public` exposed, `max_rows` set, no anonymous write grants. The local part is **Covered**; the production setting is **Manual**.
 
 ### Sign-in and accounts
 - [ ] **Brute-force limits with non-revealing messages.** Our API limits are **Covered**. Sign-in, sign-up, code verification and reset requests go to Supabase Auth directly, so its limits are what protect them: check the production project's rate limits (and CAPTCHA, if enabled) match the local defaults or are stricter. **Manual**, then add a note to this file. Messages are **Covered**.
@@ -78,7 +90,7 @@ These are tested and stay true; change them only with a plan update.
 - [ ] **Server-side renaming**: stored under a generated id, never the uploaded name; no user-supplied path segments.
 - [ ] **Private bucket**, no client policies; only the API reads and writes.
 - [ ] **Short-lived signed links** (about 60 seconds) issued only after an ownership check; employers only for a non-withdrawn applicant.
-- [ ] No active content served from the storage host (download with `Content-Disposition: attachment`; photos re-encoded if added).
+- [ ] No active content served from the storage host (download with `Content-Disposition: attachment`; photos re-encoded if added). A logo, when added, is stored by us and shown from our own host, never from an address the employer types.
 - [ ] Malware scanning is not planned for version 1. The owner decides whether to add it; if not, say so in the privacy policy review.
 - Tests: all **Needs test** (step 18): wrong content under a right extension, oversize, double extension, path characters in a name, stranger and employer without an application refused, expired link.
 
@@ -107,7 +119,7 @@ These are tested and stay true; change them only with a plan update.
 
 ### Review before launch 1
 - [ ] **OWASP Top 10 review** (current list) walked through item by item against this repository, with the findings written in this file: broken access control, security misconfiguration, supply chain, cryptographic failures, injection, insecure design, authentication failures, integrity failures, logging and alerting failures, and exceptional-condition handling. Each item names the control and the test, or opens a fix.
-- [ ] **Authenticated manual test** of the main abuse cases against a staging copy: employer A against employer B's job, applicant, payment and company; seeker against another seeker; signed-out against every `/api/v1` route; role change in the database while a token is live.
+- [ ] **Authenticated manual test** of the main abuse cases against a staging copy: employer A against employer B's job, applicant, payment and company; seeker against another seeker; signed-out against every `/api/v1` route; role change in the database while a token is live; direct Data API calls with each role's token against every table.
 - [ ] **Dependency and secret scan** run once more on the release commit.
 - [ ] **Privacy policy and terms** final (owner-supplied) and matching what the product collects.
 - [ ] Optional, owner decision: an independent security review or penetration test before charging real money.
@@ -116,7 +128,8 @@ These are tested and stay true; change them only with a plan update.
 
 | Step | New security tests |
 |---|---|
-| 9 | RLS through the real Data API (user token applied, stranger and anon refused); ownership check on the company profile |
+| 9 (done) | RLS through the real Data API (user token applied, stranger and anon refused, server-decided columns refused, private schema closed, forged token refused); ownership check on the company profile (also with RLS off); the public company allowlist; website scheme handling |
+| 10 | Reopen and status rules; owner-only edits; the CHECK constraints migration if the owner agrees |
 | 10b | Security headers and nonce CSP on pages and error pages; nonce differs per request and appears on every script; no `unsafe-inline` or `unsafe-eval` in production; source rule against `dangerouslySetInnerHTML` and `innerHTML` |
 | 13 to 17 | Server-side price; checkout refusals; webhook idempotency, retry cap, `needs_review`, refund; alert on failure; live-key gate |
 | 16 | Alert email header sanitizing and retry |

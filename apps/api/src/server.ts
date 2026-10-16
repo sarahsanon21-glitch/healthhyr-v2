@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { createApp } from './app';
 import { createTokenVerifier, remoteKeys } from './auth/verifyToken';
 import { EnvError, parseEnv } from './env';
+import { createAnonClient } from './lib/anonClient';
 import { createUserClientFactory } from './lib/userClient';
 import { consoleLogger } from './logger';
 
@@ -34,6 +35,7 @@ const app = createApp({
     audience: config.supabase.audience,
   }),
   createUserClient: createUserClientFactory(config.supabase),
+  anonClient: createAnonClient(config.supabase),
   logger: consoleLogger,
 });
 
