@@ -7,9 +7,9 @@
 | Lime | #D6ED9B | Fill only (badges, highlights), always with dark text |
 | Paper (page background) | #F7F8F3 | Page background |
 | Surface (white) | #FFFFFF | Cards, inputs, modals |
-| Line | #DFE6DE | Borders, dividers |
+| Line | #DFE6DE | Decorative borders and dividers only (not form controls, see below) |
 | Olive (brand accent) | #749047 | "Hyr" in the logo, large headings only (24px or bigger) |
-| Muted text | #566A63 | Secondary text |
+| Muted text | #566A63 | Secondary text, form control borders |
 | Danger | #B42318 | Errors, destructive actions. Text or border on Paper/Surface, or Surface text on a Danger fill. Pair with an icon or label, never color alone. |
 
 Success states reuse Primary green (no separate success color).
@@ -27,6 +27,7 @@ Minimum for normal text is 4.5:1. Large text (24px+, or 18.66px+ bold) needs 3:1
 | Ink | Lime | 9.28 | All text (the only text color allowed on Lime) |
 | Primary | Paper | 7.46 | All text, links |
 | Primary | Surface | 7.97 | All text, links |
+| Primary | Line | 6.26 | Hover background on ghost buttons |
 | Surface | Primary | 7.97 | Button labels |
 | Muted | Paper | 5.41 | All text |
 | Muted | Surface | 5.77 | All text |
@@ -37,3 +38,17 @@ Minimum for normal text is 4.5:1. Large text (24px+, or 18.66px+ bold) needs 3:1
 | Olive | Surface | 3.61 | Large headings only (fails 4.5:1) |
 
 Not allowed: Muted on Lime (4.52, too close to the limit), any text color other than Ink on Lime, Olive for body or small text.
+
+## Non-text contrast (borders, focus, controls)
+
+UI boundaries need 3:1 against their background (WCAG 1.4.11).
+
+| Element | Colors | Ratio | Verdict |
+|---|---|---|---|
+| Form control border (input, textarea, select) | Muted on Surface | 5.77 | Use this |
+| Form control border on a Paper page | Muted on Paper | 5.41 | Use this |
+| Focus outline | Primary on Paper | 7.46 | Use this |
+| Focus outline | Primary on Surface | 7.97 | Use this |
+| Switch thumb on an off track | Surface on Muted | 5.77 | Use this |
+| Card border, dividers | Line on Surface | 1.27 | Decorative only. Never as the only boundary of a control. |
+| Card border, dividers | Line on Paper | 1.19 | Decorative only. Never as the only boundary of a control. |

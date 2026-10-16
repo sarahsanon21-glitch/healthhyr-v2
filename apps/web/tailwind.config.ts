@@ -6,6 +6,7 @@ import {
   colors,
   fontFallback,
   fontSizes,
+  fontWeights,
   fonts,
   layout,
   radii,
@@ -24,6 +25,7 @@ const config = {
       body: stack(fonts.body),
       sans: stack(fonts.body),
     },
+    fontWeight: Object.fromEntries(Object.entries(fontWeights).map(([name, weight]) => [name, String(weight)])),
     fontSize: Object.fromEntries(
       Object.entries(fontSizes).map(([name, { size, lineHeight }]) => [name, [size, { lineHeight }]]),
     ),
@@ -32,7 +34,13 @@ const config = {
     boxShadow: { ...shadows, none: 'none' },
     screens: { ...breakpoints },
     extend: {
-      maxWidth: { container: layout.containerMax },
+      maxWidth: {
+        container: layout.containerMax,
+        'modal-sm': layout.modal.sm,
+        'modal-md': layout.modal.md,
+        'modal-lg': layout.modal.lg,
+        toast: layout.toast,
+      },
     },
   },
 } satisfies Config;

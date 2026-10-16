@@ -1,6 +1,7 @@
 // Scans web source for design-rule violations (CLAUDE.md and docs/COLORS.md):
 // no raw colors outside tokens.ts, no text under 12px, lime is never a text color,
-// olive text only in the few components that guarantee large sizes, no default Tailwind palette.
+// olive text only in the few components that guarantee large sizes, no default Tailwind palette,
+// and keyboard focus is never hidden.
 
 export interface Violation {
   file: string;
@@ -46,6 +47,11 @@ const rules: Array<{ rule: string; pattern: RegExp; skipFor?: (file: string) => 
     rule: 'olive-text-outside-allowed-components',
     pattern: /(?<![A-Za-z0-9_])text-olive(?![A-Za-z0-9_-])|\bcolor:\s*(?:var\(--color-olive\)|theme\(colors\.olive\))/g,
     skipFor: (file) => OLIVE_TEXT_ALLOWED_FILES.includes(file),
+  },
+  {
+    // Keyboard focus must stay visible. The global :focus-visible outline in globals.css does the work.
+    rule: 'focus-outline-removed',
+    pattern: /(?<![A-Za-z0-9_-])(?:[a-z0-9-]+:)*outline-(?:none|hidden|0)(?![A-Za-z0-9_-])/g,
   },
 ];
 

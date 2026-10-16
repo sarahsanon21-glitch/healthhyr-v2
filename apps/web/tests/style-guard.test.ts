@@ -58,6 +58,18 @@ describe('style guard: what it catches', () => {
     expect(rulesFor('<p className="text-black" />')).toContain('white-or-black-utility');
   });
 
+  it('removed focus outlines, including with variants', () => {
+    expect(rulesFor('<button className="outline-none" />')).toContain('focus-outline-removed');
+    expect(rulesFor('<button className="focus:outline-none" />')).toContain('focus-outline-removed');
+    expect(rulesFor('<button className="focus-visible:outline-hidden" />')).toContain('focus-outline-removed');
+    expect(rulesFor('<button className="outline-0" />')).toContain('focus-outline-removed');
+  });
+
+  it('allows outline utilities that keep focus visible', () => {
+    expect(rulesFor('<button className="outline-2 outline-offset-2 outline-primary" />')).toEqual([]);
+    expect(rulesFor('<button className="focus-visible:outline-2" />')).toEqual([]);
+  });
+
   it('accepts token utilities', () => {
     expect(rulesFor('<p className="bg-surface text-ink border-line text-danger bg-paper text-muted text-primary" />')).toEqual([]);
   });

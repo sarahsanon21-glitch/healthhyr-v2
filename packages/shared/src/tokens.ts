@@ -22,6 +22,15 @@ export const fonts = {
 
 export const fontFallback = ['ui-sans-serif', 'system-ui', 'sans-serif'] as const;
 
+/** Named weights for font-* utilities. Only weights loaded in fonts above are used by components. */
+export const fontWeights = {
+  normal: 400,
+  medium: 500,
+  semibold: 600,
+  bold: 700,
+  extrabold: 800,
+} as const;
+
 /** No text under 12px, anywhere. */
 export const MIN_FONT_SIZE_PX = 12;
 /** Olive is allowed only for large text (24px and up). */
@@ -81,6 +90,8 @@ export const breakpoints = {
 export const layout = {
   containerMax: '1152px',
   gutter: '16px',
+  modal: { sm: '420px', md: '560px', lg: '720px' },
+  toast: '380px',
 } as const;
 
 /**
@@ -94,6 +105,7 @@ export const textPairs = [
   { text: 'ink', on: 'lime' },
   { text: 'primary', on: 'paper' },
   { text: 'primary', on: 'surface' },
+  { text: 'primary', on: 'line' },
   { text: 'surface', on: 'primary' },
   { text: 'muted', on: 'paper' },
   { text: 'muted', on: 'surface' },
@@ -106,3 +118,5 @@ export const textPairs = [
 
 export const CONTRAST_NORMAL = 4.5;
 export const CONTRAST_LARGE = 3;
+/** Form control borders, focus outlines and other UI boundaries (WCAG 1.4.11). */
+export const CONTRAST_UI = 3;

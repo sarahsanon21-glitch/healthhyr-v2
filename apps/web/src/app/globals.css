@@ -5,6 +5,28 @@
 @import 'tailwindcss/utilities.css' layer(utilities);
 @config '../../tailwind.config.ts';
 
+/* Animations are theme-driven in Tailwind and the default theme is off, so they live here.
+   Components pair them with motion-reduce:animate-none. */
+@keyframes hh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes hh-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@utility animate-spin {
+  animation: hh-spin 0.8s linear infinite;
+}
+
+@utility animate-pulse {
+  animation: hh-pulse 1.6s ease-in-out infinite;
+}
+
 @layer base {
   html {
     @apply bg-paper font-body text-base text-ink antialiased;
