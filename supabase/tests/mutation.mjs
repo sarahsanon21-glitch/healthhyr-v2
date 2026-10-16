@@ -149,6 +149,72 @@ const mutations = [
     sql: 'grant truncate on admin_audit_log to service_role;',
     expectFail: ['is append-only, even for the service role'],
   },
+
+  // ───────── step 10: reopen rule and the text constraints of migration 0002 ─────────
+  {
+    name: 'reopen_job republishes a closed job even after its end date (no new payment needed)',
+    sql: `do $mutation$
+          declare d text;
+          begin
+            d := pg_get_functiondef('public.reopen_job(uuid,uuid)'::regprocedure);
+            d := replace(d, 'j.expires_at > now()', 'true');
+            execute d;
+          end $mutation$;`,
+    expectFail: ['reopening an expired job (or a closed one past its end date) returns it to draft and clears the payment'],
+  },
+  {
+    name: 'constraint removed: employer website may be any text (javascript: addresses)',
+    sql: 'alter table employer_profiles drop constraint employer_profiles_website_ok;',
+    expectFail: ['website refuses every dangerous or malformed address'],
+  },
+  {
+    name: 'constraint removed: employer description has no length limit',
+    sql: 'alter table employer_profiles drop constraint employer_profiles_description_ok;',
+    expectFail: ['description over its limit (5001 characters) is refused'],
+  },
+  {
+    name: 'constraint removed: job title has no length limit',
+    sql: 'alter table jobs drop constraint jobs_title_ok;',
+    expectFail: ['title over its limit is refused when creating and when editing'],
+  },
+  {
+    name: 'constraint removed: resume path may be an address or a script',
+    sql: 'alter table seeker_private drop constraint seeker_private_resume_url_ok;',
+    expectFail: ['resume_url is a storage path, never an address or a script'],
+  },
+  {
+    name: 'address check weakened to accept anything (all three address columns at once)',
+    sql: `create or replace function private.http_url(v text) returns boolean
+            language sql immutable parallel safe as $$ select true $$;`,
+    expectFail: [
+      'website refuses every dangerous or malformed address',
+      'logo_url refuses every dangerous or malformed address',
+      'avatar_url refuses every dangerous or malformed address, and accepts real ones',
+    ],
+  },
+  {
+    name: 'single-line check weakened to length only (control characters and line breaks allowed)',
+    sql: `create or replace function private.clean_line(v text, max_len integer) returns boolean
+            language sql immutable parallel safe as $$ select v is null or char_length(v) <= max_len $$;`,
+    expectFail: ['refuses control characters', 'single-line job fields refuse control characters'],
+  },
+  {
+    name: 'signup trigger no longer cuts a long name (signup would fail against the constraints)',
+    sql: `create or replace function handle_new_user() returns trigger
+            language plpgsql security definer set search_path = public as $$
+          declare r user_role;
+          begin
+            r := case new.raw_user_meta_data->>'role' when 'employer' then 'employer'::user_role else 'seeker'::user_role end;
+            insert into profiles (id, role, email, full_name) values (new.id, r, new.email, new.raw_user_meta_data->>'full_name');
+            if r = 'employer' then insert into employer_profiles (id) values (new.id);
+            else
+              insert into seeker_profiles (id, display_name) values (new.id, coalesce(new.raw_user_meta_data->>'full_name', 'New seeker'));
+              insert into seeker_private (id) values (new.id);
+            end if;
+            return new;
+          end $$;`,
+    expectFail: ['a very long, odd or empty name is cut, cleaned or defaulted instead of failing signup'],
+  },
 ];
 
 function runSuite(mutationSql) {

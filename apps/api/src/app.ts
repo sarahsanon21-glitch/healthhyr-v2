@@ -13,6 +13,7 @@ import { API_V1, STRIPE_WEBHOOK_PATH } from './routes/paths';
 import { reservedStripeWebhook } from './routes/stripeWebhook';
 import { registerV1Routes } from './routes/v1';
 import { publicRouter } from './routes/v1/public';
+import type { JobTransitions } from './services/jobTransitions';
 
 /**
  * Everything the app needs, and nothing secret: no service-role key and no Stripe key come in here.
@@ -29,6 +30,8 @@ export interface AppOptions {
   createUserClient: UserClientFactory;
   /** Anon-key client for public routes (no signed-in user). Row-level security decides what it sees. */
   anonClient: SupabaseClient;
+  /** Server-only job state changes (close, reopen, cancel checkout). Built in server.ts; checks ownership in code. */
+  jobTransitions: JobTransitions;
   logger?: Logger;
   /** Replaces the reserved Stripe webhook handler. It receives the raw body as a Buffer. */
   stripeWebhook?: RequestHandler;
@@ -69,7 +72,7 @@ export function createApp(options: AppOptions): Express {
   const api = Router();
   api.use(authenticate({ verifyToken: options.verifyToken, createUserClient: options.createUserClient }));
   api.use(userRateLimiter(options.userRateLimit ?? DEFAULT_USER_LIMIT));
-  registerV1Routes(api);
+  registerV1Routes(api, { jobTransitions: options.jobTransitions });
   options.registerRoutes?.(api);
   app.use(API_V1, api);
 

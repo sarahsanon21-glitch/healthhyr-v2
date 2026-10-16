@@ -23,3 +23,14 @@ export function supabaseEnv(): { url: string; anonKey: string; databaseUrl: stri
   }
   return { url: SUPABASE_URL!.replace(/\/$/, ''), anonKey: SUPABASE_ANON_KEY!, databaseUrl: RLS_DATABASE_URL! };
 }
+
+/** The LOCAL service-role key, for tests that exercise server-only operations. */
+export function serviceRoleKey(): string {
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!key) {
+    throw new Error(
+      'Missing SUPABASE_SERVICE_ROLE_KEY. Copy "SERVICE_ROLE_KEY" from `npm run db:status` into the git-ignored root .env (see .env.example).',
+    );
+  }
+  return key;
+}

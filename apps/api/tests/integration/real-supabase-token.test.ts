@@ -14,6 +14,7 @@ import { createApp } from '../../src/app';
 import { TokenError, createTokenVerifier, remoteKeys } from '../../src/auth/verifyToken';
 import { createAnonClient } from '../../src/lib/anonClient';
 import { silentLogger } from '../../src/logger';
+import type { JobTransitions } from '../../src/services/jobTransitions';
 import { supabaseEnv } from './env';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -136,6 +137,8 @@ describe('the real token through the whole app', () => {
       userRateLimit: { windowMs: 60_000, max: 1000 },
       verifyToken: verifier,
       anonClient: createAnonClient({ url, anonKey }),
+      // These routes are not used here, so the server-only operations are not wired.
+      jobTransitions: {} as JobTransitions,
       logger: silentLogger,
       createUserClient: () =>
         ({

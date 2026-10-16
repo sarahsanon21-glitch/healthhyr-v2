@@ -5,3 +5,4 @@ export * from './contact';
 export * from './job';
 export * from './message';
 export * from './profile';
+export * from './text';

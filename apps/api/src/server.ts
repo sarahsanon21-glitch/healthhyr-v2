@@ -5,8 +5,10 @@ import { createApp } from './app';
 import { createTokenVerifier, remoteKeys } from './auth/verifyToken';
 import { EnvError, parseEnv } from './env';
 import { createAnonClient } from './lib/anonClient';
+import { createServiceClient } from './lib/serviceClient';
 import { createUserClientFactory } from './lib/userClient';
 import { consoleLogger } from './logger';
+import { createJobTransitions } from './services/jobTransitions';
 
 // Local development reads apps/api/.env (git-ignored). Real environment variables win over it.
 // API_ENV_FILE points somewhere else, for example to a file that does not exist in boot tests.
@@ -36,6 +38,8 @@ const app = createApp({
   }),
   createUserClient: createUserClientFactory(config.supabase),
   anonClient: createAnonClient(config.supabase),
+  // The only place the service-role client is created. It is handed to server-only services, never to routes.
+  jobTransitions: createJobTransitions(createServiceClient(config.supabase)),
   logger: consoleLogger,
 });
 

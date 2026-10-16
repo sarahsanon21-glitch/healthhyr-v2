@@ -136,6 +136,124 @@ describe('the employer company profile', () => {
   });
 });
 
+const JOB = {
+  id: ID,
+  title: 'Home health aide',
+  status: 'draft',
+  careRole: 'hha',
+  employmentType: 'part_time',
+  city: 'Austin',
+  state: 'TX',
+  publishedAt: null,
+  expiresAt: null,
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-02T00:00:00Z',
+  description: 'Support clients with daily living activities.',
+  zip: null,
+  payMin: null,
+  payMax: null,
+  payPeriod: null,
+  easyApply: true,
+  missingFields: [],
+};
+
+const JOB_BODY = { title: 'Home health aide', description: 'Support clients.', careRole: 'hha', employmentType: 'part_time', city: 'Austin', state: 'TX' } as const;
+
+describe('the employer jobs', () => {
+  const call = (fetchImpl: unknown) => client(fetchImpl as typeof fetch);
+  const sent = (fetchImpl: ReturnType<typeof vi.fn>) => fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+
+  it('lists jobs with GET /api/v1/employer/jobs and gives back the list', async () => {
+    const { description: _d, zip: _z, payMin: _a, payMax: _b, payPeriod: _c, easyApply: _e, missingFields: _m, ...summary } = JOB;
+    const fetchImpl = vi.fn(async () => jsonResponse({ jobs: [summary] }));
+    expect(await call(fetchImpl).listJobs()).toEqual([summary]);
+    const [url, init] = sent(fetchImpl);
+    expect(url).toBe('https://api.example.test/api/v1/employer/jobs');
+    expect(init.method).toBe('GET');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer the-access-token');
+  });
+
+  it('reads one job with GET /api/v1/employer/jobs/:id', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(JOB));
+    expect(await call(fetchImpl).getJob(ID)).toEqual(JOB);
+    expect(sent(fetchImpl)[0]).toBe(`https://api.example.test/api/v1/employer/jobs/${ID}`);
+  });
+
+  it('creates a draft with POST and a JSON body', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(JOB, 201));
+    await call(fetchImpl).createJob(JOB_BODY);
+    const [url, init] = sent(fetchImpl);
+    expect(url).toBe('https://api.example.test/api/v1/employer/jobs');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual(JOB_BODY);
+    expect(init.credentials).toBe('omit');
+  });
+
+  it('saves a job with PUT and a JSON body', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse(JOB));
+    await call(fetchImpl).updateJob(ID, JOB_BODY);
+    const [url, init] = sent(fetchImpl);
+    expect(url).toBe(`https://api.example.test/api/v1/employer/jobs/${ID}`);
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body as string)).toEqual(JOB_BODY);
+  });
+
+  it('deletes a draft with DELETE, and an empty answer is fine', async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 204 }));
+    await expect(call(fetchImpl).deleteJob(ID)).resolves.toBeUndefined();
+    const [url, init] = sent(fetchImpl);
+    expect(url).toBe(`https://api.example.test/api/v1/employer/jobs/${ID}`);
+    expect(init.method).toBe('DELETE');
+    expect(init.body).toBeUndefined();
+  });
+
+  it.each([
+    ['closeJob', 'close', 'closed'],
+    ['reopenJob', 'reopen', 'draft'],
+    ['cancelCheckout', 'cancel-checkout', 'draft'],
+  ] as const)('%s posts to /%s and gives back the job as it is now', async (method, path, status) => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ ...JOB, status }));
+    const job = await call(fetchImpl)[method](ID);
+    expect(job.status).toBe(status);
+    const [url, init] = sent(fetchImpl);
+    expect(url).toBe(`https://api.example.test/api/v1/employer/jobs/${ID}/${path}`);
+    expect(init.method).toBe('POST');
+    expect(init.body).toBeUndefined();
+  });
+
+  it.each(['', 'not-a-uuid', '../me', `${ID}/close`, `${ID}?x=1`, '1234'])('never builds an address from %j: it is a 404 without asking the server', async (id) => {
+    const fetchImpl = vi.fn();
+    for (const method of ['getJob', 'deleteJob', 'closeJob', 'reopenJob', 'cancelCheckout'] as const) {
+      await expect(call(fetchImpl)[method](id)).rejects.toMatchObject({ status: 404, code: 'not_found' });
+    }
+    await expect(call(fetchImpl).updateJob(id, JOB_BODY)).rejects.toMatchObject({ status: 404 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('does not call the server without a token', async () => {
+    const fetchImpl = vi.fn();
+    const noToken = client(fetchImpl as unknown as typeof fetch, null);
+    await expect(noToken.listJobs()).rejects.toMatchObject({ code: 'no_session' });
+    await expect(noToken.createJob(JOB_BODY)).rejects.toMatchObject({ code: 'no_session' });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('keeps the API’s code and friendly message for a refusal', async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ error: { code: 'job_locked', message: 'Cancel checkout before editing this job.', requestId: 'r1' } }, 409));
+    const error = (await call(fetchImpl).updateJob(ID, JOB_BODY).catch((e: unknown) => e)) as ApiError;
+    expect(error).toMatchObject({ status: 409, code: 'job_locked', message: 'Cancel checkout before editing this job.' });
+  });
+
+  it('refuses an answer that is not a job, or has a status that does not exist', async () => {
+    for (const body of [{}, { ...JOB, status: 'archived' }, { ...JOB, id: 'nope' }, null, { jobs: 'x' }]) {
+      const fetchImpl = vi.fn(async () => jsonResponse(body));
+      await expect(call(fetchImpl).getJob(ID)).rejects.toMatchObject({ status: 502, code: 'bad_response' });
+    }
+    const list = vi.fn(async () => jsonResponse({ jobs: [{ nope: true }] }));
+    await expect(call(list).listJobs()).rejects.toMatchObject({ status: 502, code: 'bad_response' });
+  });
+});
+
 describe('the public API client (no sign-in)', () => {
   const PUBLIC = { companyName: 'Sunrise Home Care', description: null, website: null, logoUrl: null, industry: null, companySize: null, city: 'Fresno', state: 'CA' };
   const publicClient = (fetchImpl: typeof fetch) => createPublicApiClient({ baseUrl: 'https://api.example.test/', fetchImpl });

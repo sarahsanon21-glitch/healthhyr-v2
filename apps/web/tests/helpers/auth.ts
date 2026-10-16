@@ -1,11 +1,12 @@
 // Test doubles for the website's auth layer.
-import type { CompanyProfileResponse, UserRole } from '@healthhyr/shared';
+import type { CompanyProfileResponse, JobDetail, JobSummary, UserRole } from '@healthhyr/shared';
 import { vi } from 'vitest';
 import { ApiError, type ApiClient } from '../../src/lib/api/client';
 import { createAuthService } from '../../src/lib/auth/service';
 import type { AuthBackend, AuthService, AuthState, BackendResult } from '../../src/lib/auth/types';
 
 export const USER_ID = '3f0c9a52-8a5e-4f0e-9a58-5a3a9d9b8f10';
+export const JOB_ID = '7b1e2c3d-4a5f-4b6c-8d7e-9f0a1b2c3d4e';
 
 export const ok: BackendResult = { ok: true };
 export const backendError = (code: string, message = 'raw provider message', status?: number): BackendResult => ({
@@ -51,6 +52,14 @@ export interface FakeApi extends ApiClient {
   getMe: ReturnType<typeof vi.fn> & ApiClient['getMe'];
   getMyCompany: ReturnType<typeof vi.fn> & ApiClient['getMyCompany'];
   saveMyCompany: ReturnType<typeof vi.fn> & ApiClient['saveMyCompany'];
+  listJobs: ReturnType<typeof vi.fn> & ApiClient['listJobs'];
+  getJob: ReturnType<typeof vi.fn> & ApiClient['getJob'];
+  createJob: ReturnType<typeof vi.fn> & ApiClient['createJob'];
+  updateJob: ReturnType<typeof vi.fn> & ApiClient['updateJob'];
+  deleteJob: ReturnType<typeof vi.fn> & ApiClient['deleteJob'];
+  closeJob: ReturnType<typeof vi.fn> & ApiClient['closeJob'];
+  reopenJob: ReturnType<typeof vi.fn> & ApiClient['reopenJob'];
+  cancelCheckout: ReturnType<typeof vi.fn> & ApiClient['cancelCheckout'];
 }
 
 /** A company profile as the API returns it. */
@@ -68,13 +77,63 @@ export const makeCompany = (fields: Partial<CompanyProfileResponse> = {}): Compa
   ...fields,
 });
 
+/** A job as the API returns it in full. */
+export const makeJob = (fields: Partial<JobDetail> = {}): JobDetail => ({
+  id: JOB_ID,
+  title: 'Home health aide',
+  status: 'draft',
+  careRole: 'hha',
+  employmentType: 'part_time',
+  city: 'Austin',
+  state: 'TX',
+  publishedAt: null,
+  expiresAt: null,
+  createdAt: '2026-01-01T00:00:00Z',
+  updatedAt: '2026-01-02T00:00:00Z',
+  description: 'Support clients with daily living activities in their homes across the county, including meals.',
+  zip: null,
+  payMin: null,
+  payMax: null,
+  payPeriod: null,
+  easyApply: true,
+  missingFields: [],
+  ...fields,
+});
+
+/** A job as the API returns it in a list. */
+export const makeSummary = (fields: Partial<JobSummary> = {}): JobSummary => {
+  const { description: _d, zip: _z, payMin: _a, payMax: _b, payPeriod: _c, easyApply: _e, missingFields: _m, ...summary } = makeJob(fields);
+  return summary;
+};
+
+type Answer<T, A extends unknown[] = []> = T | ApiError | ((...args: A) => T);
+
+/** What a fake API method answers: a value, an ApiError to throw, or a function. */
+async function answer<T, A extends unknown[]>(value: Answer<T, A>, args: A): Promise<T> {
+  if (value instanceof ApiError) throw value;
+  return typeof value === 'function' ? (value as (...a: A) => T)(...args) : value;
+}
+
+export interface JobsStub {
+  list?: Answer<JobSummary[]>;
+  get?: Answer<JobDetail, [string]>;
+  create?: Answer<JobDetail, [Record<string, unknown>]>;
+  update?: Answer<JobDetail, [string, Record<string, unknown>]>;
+  remove?: ApiError;
+  close?: Answer<JobDetail, [string]>;
+  reopen?: Answer<JobDetail, [string]>;
+  cancel?: Answer<JobDetail, [string]>;
+}
+
 /**
  * An API that answers GET /api/v1/me with the given role. By default, saving a company returns what
- * was sent (as the API would, with the listing decided like the database trigger does).
+ * was sent (as the API would, with the listing decided like the database trigger does), and the job
+ * methods answer from `jobs`, or with sensible defaults.
  */
 export function makeApi(
   role: UserRole | ApiError = 'seeker',
   company: { load?: CompanyProfileResponse | ApiError; save?: CompanyProfileResponse | ApiError | ((input: Record<string, unknown>) => CompanyProfileResponse) } = {},
+  jobs: JobsStub = {},
 ): FakeApi {
   const getMe = vi.fn(async () => {
     if (role instanceof ApiError) throw role;
@@ -103,7 +162,21 @@ export function makeApi(
       slug: listed ? 'sunrise-home-care-3f0c9a' : null,
     });
   });
-  return { getMe, getMyCompany, saveMyCompany } as FakeApi;
+
+  const listJobs = vi.fn(async () => answer(jobs.list ?? [], []));
+  const getJob = vi.fn(async (id: string) => answer(jobs.get ?? makeJob({ id }), [id]));
+  const createJob = vi.fn(async (input: Record<string, unknown>) => answer(jobs.create ?? makeJob({ title: String(input.title ?? '') }), [input]));
+  const updateJob = vi.fn(async (id: string, input: Record<string, unknown>) =>
+    answer(jobs.update ?? makeJob({ id, title: String(input.title ?? ''), description: String(input.description ?? '') }), [id, input]),
+  );
+  const deleteJob = vi.fn(async () => {
+    if (jobs.remove) throw jobs.remove;
+  });
+  const closeJob = vi.fn(async (id: string) => answer(jobs.close ?? makeJob({ id, status: 'closed' }), [id]));
+  const reopenJob = vi.fn(async (id: string) => answer(jobs.reopen ?? makeJob({ id, status: 'draft' }), [id]));
+  const cancelCheckout = vi.fn(async (id: string) => answer(jobs.cancel ?? makeJob({ id, status: 'draft' }), [id]));
+
+  return { getMe, getMyCompany, saveMyCompany, listJobs, getJob, createJob, updateJob, deleteJob, closeJob, reopenJob, cancelCheckout } as unknown as FakeApi;
 }
 
 /** The real auth service wired to fake backend and API: the whole sign-in logic, no network. */

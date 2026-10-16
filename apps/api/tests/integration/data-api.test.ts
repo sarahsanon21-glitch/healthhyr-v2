@@ -5,116 +5,37 @@
 // policies and column privileges apply, from the HTTP request all the way to the table. It also
 // runs the employer company profile and the public company page against the real thing.
 import { randomUUID } from 'node:crypto';
-import type { AddressInfo } from 'node:net';
-import type { Server } from 'node:http';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PUBLIC_COMPANY_FIELDS } from '@healthhyr/shared';
-import { clearMailFor, waitForCode } from '../../../../tests/support/mailpit';
-import { createApp } from '../../src/app';
-import { createTokenVerifier, remoteKeys } from '../../src/auth/verifyToken';
-import { createAnonClient } from '../../src/lib/anonClient';
-import { createUserClientFactory } from '../../src/lib/userClient';
-import { silentLogger } from '../../src/logger';
+import { clearMailFor } from '../../../../tests/support/mailpit';
+import { startApi, type RunningApi } from './app';
 import { supabaseEnv } from './env';
+import { callApi, createPerson, createdEmails, rest, type CallOptions, type Person } from './people';
 
-const { url, anonKey, databaseUrl } = supabaseEnv();
+const { databaseUrl } = supabaseEnv();
 const db = new pg.Client({ connectionString: databaseUrl });
-const emails: string[] = [];
-const authHeaders = { 'Content-Type': 'application/json', apikey: anonKey };
 
-interface Person {
-  email: string;
-  id: string;
-  token: string;
-}
-
-let server: Server;
-let apiUrl = '';
+let api: RunningApi;
 let employerA: Person;
 let employerB: Person;
 let seeker: Person;
 
-async function createPerson(label: string, role: 'employer' | 'seeker'): Promise<Person> {
-  const email = `data-api-${label}-${randomUUID()}@example.test`;
-  emails.push(email);
-  await clearMailFor(email);
-  const signUp = await fetch(`${url}/auth/v1/signup`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({ email, password: `Pw-${randomUUID()}`, data: { full_name: `Data API ${label}`, role } }),
-  });
-  if (!signUp.ok) throw new Error(`signup failed (${signUp.status})`);
-  const code = await waitForCode(email, { subjectIncludes: 'confirmation' });
-  const verify = await fetch(`${url}/auth/v1/verify`, {
-    method: 'POST',
-    headers: authHeaders,
-    body: JSON.stringify({ type: 'signup', email, token: code }),
-  });
-  const body = (await verify.json()) as { access_token?: string; user?: { id: string } };
-  if (!verify.ok || !body.access_token || !body.user) throw new Error(`confirmation failed (${verify.status})`);
-  return { email, id: body.user.id, token: body.access_token };
-}
-
-/** A request straight to the Data API, as the given token (or as anon when there is none). */
-async function rest(path: string, options: { token?: string; method?: string; body?: unknown } = {}) {
-  const response = await fetch(`${url}/rest/v1/${path}`, {
-    method: options.method ?? 'GET',
-    headers: {
-      apikey: anonKey,
-      Authorization: `Bearer ${options.token ?? anonKey}`,
-      'Content-Type': 'application/json',
-      Prefer: 'return=representation',
-    },
-    ...(options.body !== undefined && { body: JSON.stringify(options.body) }),
-  });
-  const text = await response.text();
-  return { status: response.status, json: text ? (JSON.parse(text) as unknown) : null };
-}
-
-/** A request to the HealthHyr API. */
-async function api(path: string, options: { token?: string; method?: string; body?: unknown } = {}) {
-  const response = await fetch(`${apiUrl}/api/v1${path}`, {
-    method: options.method ?? 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.token && { Authorization: `Bearer ${options.token}` }),
-    },
-    ...(options.body !== undefined && { body: JSON.stringify(options.body) }),
-  });
-  const text = await response.text();
-  return { status: response.status, body: (text ? JSON.parse(text) : null) as Record<string, unknown> };
-}
-
+const call = (path: string, options: CallOptions = {}) => callApi(api.url, path, options);
 const errorOf = (body: Record<string, unknown>) => body.error as { code: string; message: string };
 
 beforeAll(async () => {
   await db.connect();
-  const issuer = `${url}/auth/v1`;
-  const app = createApp({
-    corsOrigins: ['http://localhost:3000'],
-    trustProxy: 0,
-    rateLimit: { windowMs: 60_000, max: 10_000 },
-    userRateLimit: { windowMs: 60_000, max: 10_000 },
-    verifyToken: createTokenVerifier({ keys: remoteKeys(`${issuer}/.well-known/jwks.json`), issuer, audience: 'authenticated' }),
-    createUserClient: createUserClientFactory({ url, anonKey }),
-    anonClient: createAnonClient({ url, anonKey }),
-    logger: silentLogger,
-  });
-  await new Promise<void>((resolve) => {
-    server = app.listen(0, '127.0.0.1', () => resolve());
-  });
-  apiUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-
-  employerA = await createPerson('employer-a', 'employer');
-  employerB = await createPerson('employer-b', 'employer');
-  seeker = await createPerson('seeker', 'seeker');
+  api = await startApi();
+  employerA = await createPerson('data-api-employer-a', 'employer');
+  employerB = await createPerson('data-api-employer-b', 'employer');
+  seeker = await createPerson('data-api-seeker', 'seeker');
 });
 
 afterAll(async () => {
-  await new Promise((resolve) => server?.close(resolve));
+  await api?.close();
   // Deleting the auth user cascades to the profile and everything under it.
-  for (const email of emails) {
+  for (const email of createdEmails.filter((e) => e.includes('data-api'))) {
     await db.query('delete from auth.users where email = $1', [email]);
     await clearMailFor(email);
   }
@@ -195,33 +116,33 @@ describe('the Data API applies row-level security to the user’s own token', ()
 
 describe('the API’s per-request client is the user, so RLS applies through the API too', () => {
   it('GET /me reads the profile through the real Data API as the caller', async () => {
-    const res = await api('/me', { token: employerA.token });
+    const res = await call('/me', { token: employerA.token });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ id: employerA.id, role: 'employer' });
   });
 
   it('each person gets their own role, read as themselves', async () => {
-    const res = await api('/me', { token: seeker.token });
+    const res = await call('/me', { token: seeker.token });
     expect(res.body).toEqual({ id: seeker.id, role: 'seeker' });
   });
 });
 
 describe('employer company profile, end to end', () => {
   it('refuses no token, a seeker, and a forged token', async () => {
-    expect((await api('/employer/company')).status).toBe(401);
-    expect((await api('/employer/company', { token: seeker.token })).status).toBe(403);
-    expect((await api('/employer/company', { token: `${employerA.token}x` })).status).toBe(401);
+    expect((await call('/employer/company')).status).toBe(401);
+    expect((await call('/employer/company', { token: seeker.token })).status).toBe(403);
+    expect((await call('/employer/company', { token: `${employerA.token}x` })).status).toBe(401);
   });
 
   it('a new employer starts on the default name and is not listed', async () => {
-    const res = await api('/employer/company', { token: employerA.token });
+    const res = await call('/employer/company', { token: employerA.token });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ companyName: 'My company', isListed: false, slug: null });
   });
 
   it('refuses fields the server decides, and saves nothing', async () => {
     for (const extra of [{ is_listed: true }, { slug: 'mine' }, { id: employerB.id }, { logoUrl: 'https://example.org/l.png' }]) {
-      const res = await api('/employer/company', { token: employerA.token, method: 'PUT', body: { companyName: 'Alpha Care', ...extra } });
+      const res = await call('/employer/company', { token: employerA.token, method: 'PUT', body: { companyName: 'Alpha Care', ...extra } });
       expect(res.status, JSON.stringify(extra)).toBe(400);
     }
     const row = await db.query('select company_name from public.employer_profiles where id = $1', [employerA.id]);
@@ -229,7 +150,7 @@ describe('employer company profile, end to end', () => {
   });
 
   it('A saves a profile; the page becomes public with a slug; B’s company is untouched', async () => {
-    const saved = await api('/employer/company', {
+    const saved = await call('/employer/company', {
       token: employerA.token,
       method: 'PUT',
       body: { companyName: 'Alpha Care Test', description: 'Care at home.', website: 'https://alpha.example.org', industry: 'Home health', companySize: '11-50', city: 'Fresno', state: 'CA' },
@@ -238,13 +159,13 @@ describe('employer company profile, end to end', () => {
     expect(saved.body).toMatchObject({ companyName: 'Alpha Care Test', isListed: true, companySize: '11-50' });
     expect(saved.body.slug).toMatch(/^alpha-care-test-[0-9a-f]{6}$/);
 
-    const b = await api('/employer/company', { token: employerB.token });
+    const b = await call('/employer/company', { token: employerB.token });
     expect(b.body).toMatchObject({ companyName: 'My company', isListed: false });
   });
 
   it('B saving changes only B’s company, never A’s', async () => {
     const before = await db.query('select company_name, city from public.employer_profiles where id = $1', [employerA.id]);
-    const res = await api('/employer/company', { token: employerB.token, method: 'PUT', body: { companyName: 'Beta Care Test', city: 'Oakland' } });
+    const res = await call('/employer/company', { token: employerB.token, method: 'PUT', body: { companyName: 'Beta Care Test', city: 'Oakland' } });
     expect(res.status).toBe(200);
     const after = await db.query('select company_name, city from public.employer_profiles where id = $1', [employerA.id]);
     expect(after.rows[0]).toEqual(before.rows[0]);
@@ -255,12 +176,12 @@ describe('employer company profile, end to end', () => {
 
 describe('public company page, end to end', () => {
   it('a company still on the default name is a 404, exactly like one that does not exist', async () => {
-    const fresh = await createPerson('employer-fresh', 'employer');
+    const fresh = await createPerson('data-api-employer-fresh', 'employer');
     const row = await db.query('select slug, is_listed from public.employer_profiles where id = $1', [fresh.id]);
     expect(row.rows[0]).toEqual({ slug: null, is_listed: false });
 
-    const missing = await api('/public/companies/no-such-company-abc123');
-    const guess = await api(`/public/companies/my-company-${fresh.id.slice(0, 6)}`);
+    const missing = await call('/public/companies/no-such-company-abc123');
+    const guess = await call(`/public/companies/my-company-${fresh.id.slice(0, 6)}`);
     expect(missing.status).toBe(404);
     expect(guess.status).toBe(404);
     expect(errorOf(guess.body).code).toBe(errorOf(missing.body).code);
@@ -268,10 +189,10 @@ describe('public company page, end to end', () => {
   });
 
   it('shows a listed company to anyone, and only the allowed fields', async () => {
-    const own = await api('/employer/company', { token: employerA.token });
+    const own = await call('/employer/company', { token: employerA.token });
     const slug = own.body.slug as string;
 
-    const res = await api(`/public/companies/${slug}`);
+    const res = await call(`/public/companies/${slug}`);
     expect(res.status).toBe(200);
     expect(Object.keys(res.body).sort()).toEqual([...PUBLIC_COMPANY_FIELDS].sort());
     expect(res.body).toEqual({
@@ -289,47 +210,33 @@ describe('public company page, end to end', () => {
     expect(text).not.toContain(slug);
   });
 
-  it('a website written straight to the Data API that is not an http(s) address never reaches the page', async () => {
-    const own = await api('/employer/company', { token: employerA.token });
-    const slug = own.body.slug as string;
-    const write = await rest(`employer_profiles?id=eq.${employerA.id}`, {
-      token: employerA.token,
-      method: 'PATCH',
-      body: { website: 'javascript:alert(1)' },
-    });
-    expect(write.status).toBe(200); // the database accepts it: this is why the page cannot trust the column
-    const page = await api(`/public/companies/${slug}`);
-    expect(page.status).toBe(200);
-    expect(page.body.website).toBeNull();
-  });
-
   it('the slug stays the same after renames, and the page follows the new name', async () => {
-    const own = await api('/employer/company', { token: employerA.token });
+    const own = await call('/employer/company', { token: employerA.token });
     const slug = own.body.slug as string;
 
-    await api('/employer/company', { token: employerA.token, method: 'PUT', body: { companyName: 'Alpha Care Group Test' } });
-    const again = await api('/employer/company', { token: employerA.token });
+    await call('/employer/company', { token: employerA.token, method: 'PUT', body: { companyName: 'Alpha Care Group Test' } });
+    const again = await call('/employer/company', { token: employerA.token });
     expect(again.body.slug).toBe(slug);
-    const page = await api(`/public/companies/${slug}`);
+    const page = await call(`/public/companies/${slug}`);
     expect(page.status).toBe(200);
     expect(page.body.companyName).toBe('Alpha Care Group Test');
   });
 
   it('changing the name back to the default hides the page again, and a new name brings it back at the same address', async () => {
-    const own = await api('/employer/company', { token: employerA.token });
+    const own = await call('/employer/company', { token: employerA.token });
     const slug = own.body.slug as string;
 
-    await api('/employer/company', { token: employerA.token, method: 'PUT', body: { companyName: 'My company' } });
-    expect((await api(`/public/companies/${slug}`)).status).toBe(404);
+    await call('/employer/company', { token: employerA.token, method: 'PUT', body: { companyName: 'My company' } });
+    expect((await call(`/public/companies/${slug}`)).status).toBe(404);
 
-    await api('/employer/company', { token: employerA.token, method: 'PUT', body: { companyName: 'Alpha Again Test' } });
-    const back = await api(`/public/companies/${slug}`);
+    await call('/employer/company', { token: employerA.token, method: 'PUT', body: { companyName: 'Alpha Again Test' } });
+    const back = await call(`/public/companies/${slug}`);
     expect(back.status).toBe(200);
     expect(back.body.companyName).toBe('Alpha Again Test');
   });
 
   it('the anon client reads only listed companies, and cannot write', async () => {
-    const own = await api('/employer/company', { token: employerA.token });
+    const own = await call('/employer/company', { token: employerA.token });
     const listed = await rest(`employer_profiles?select=company_name&slug=eq.${own.body.slug as string}`);
     expect(listed.json).toHaveLength(1);
     const all = (await rest('employer_profiles?select=id,is_listed')).json as Array<{ is_listed: boolean }>;

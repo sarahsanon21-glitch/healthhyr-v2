@@ -6,8 +6,6 @@
 // and the role from GET /api/v1/me work end to end, and that asking for admin gets nobody admin.
 // It lives with the other real-Supabase tests so they share one setup and one project.
 import { randomUUID } from 'node:crypto';
-import type { AddressInfo } from 'node:net';
-import type { Server } from 'node:http';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { clearMailFor, waitForCode } from '../../../../tests/support/mailpit';
@@ -15,18 +13,13 @@ import { createApiClient } from '../../../web/src/lib/api/client';
 import { createBrowserSupabase, createSupabaseBackend } from '../../../web/src/lib/auth/backend';
 import { createAuthService } from '../../../web/src/lib/auth/service';
 import { parsePublicEnv } from '../../../web/src/lib/public-env';
-import { createApp } from '../../src/app';
-import { createTokenVerifier, remoteKeys } from '../../src/auth/verifyToken';
-import { createAnonClient } from '../../src/lib/anonClient';
-import { createUserClientFactory } from '../../src/lib/userClient';
-import { silentLogger } from '../../src/logger';
+import { startApi, type RunningApi } from './app';
 import { supabaseEnv } from './env';
 
 const { url, anonKey, databaseUrl } = supabaseEnv();
 const db = new pg.Client({ connectionString: databaseUrl });
 const createdEmails: string[] = [];
-let server: Server;
-let apiBaseUrl = '';
+let api: RunningApi;
 
 const newEmail = (label: string): string => {
   const email = `web-integration-${label}-${randomUUID()}@example.test`;
@@ -38,39 +31,23 @@ const password = () => `Pw-${randomUUID()}`;
 /** A fresh browser: its own Supabase client and auth service, signed out. */
 function newBrowser() {
   const env = parsePublicEnv({
-    NEXT_PUBLIC_API_BASE_URL: apiBaseUrl,
+    NEXT_PUBLIC_API_BASE_URL: api.url,
     NEXT_PUBLIC_SUPABASE_URL: url,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: anonKey,
   });
   const backend = createSupabaseBackend(createBrowserSupabase(env));
-  const api = createApiClient({ baseUrl: env.apiBaseUrl, getAccessToken: () => backend.accessToken() });
-  const service = createAuthService({ backend, api });
+  const client = createApiClient({ baseUrl: env.apiBaseUrl, getAccessToken: () => backend.accessToken() });
+  const service = createAuthService({ backend, api: client });
   return { backend, service };
 }
 
 beforeAll(async () => {
   await db.connect();
-  const issuer = `${url}/auth/v1`;
-  const verifyToken = createTokenVerifier({ keys: remoteKeys(`${issuer}/.well-known/jwks.json`), issuer, audience: 'authenticated' });
-  const app = createApp({
-    corsOrigins: ['http://localhost:3000'],
-    trustProxy: 0,
-    rateLimit: { windowMs: 60_000, max: 10_000 },
-    userRateLimit: { windowMs: 60_000, max: 10_000 },
-    verifyToken,
-    logger: silentLogger,
-    // The real clients: each request reads the profile through the real Data API as the signed-in user.
-    createUserClient: createUserClientFactory({ url, anonKey }),
-    anonClient: createAnonClient({ url, anonKey }),
-  });
-  await new Promise<void>((resolve) => {
-    server = app.listen(0, '127.0.0.1', () => resolve());
-  });
-  apiBaseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  api = await startApi();
 });
 
 afterAll(async () => {
-  await new Promise((resolve) => server?.close(resolve));
+  await api?.close();
   // Deleting the auth user cascades to the profile and everything under it.
   for (const email of createdEmails) {
     await db.query('delete from auth.users where email = $1', [email]);

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { JOB_LIMITS } from '../constants';
-import { CARE_ROLES, EMPLOYMENT_TYPES, PAY_PERIODS } from '../enums';
+import { CARE_ROLES, EMPLOYMENT_TYPES, JOB_STATUSES, PAY_PERIODS } from '../enums';
+import { emptyToNull, multiLine, singleLine } from './text';
 
 const money = z.number().nonnegative().max(99_999_999.99);
 
@@ -22,10 +23,10 @@ const jobFields = {
   easyApply: z.boolean().default(true),
 };
 
-type PayRange = { payMin?: number | undefined; payMax?: number | undefined };
+type PayRange = { payMin?: number | null | undefined; payMax?: number | null | undefined };
 
 const payRangeOk = (job: PayRange) =>
-  job.payMin === undefined || job.payMax === undefined || job.payMax >= job.payMin;
+  job.payMin == null || job.payMax == null || job.payMax >= job.payMin;
 
 const payRangeIssue = { message: 'Maximum pay must be at least the minimum', path: ['payMax'] };
 
@@ -48,8 +49,70 @@ export const jobPublishableSchema = z
 export type JobDraftInput = z.infer<typeof jobDraftSchema>;
 export type JobPublishableInput = z.infer<typeof jobPublishableSchema>;
 
+const optionalNumber = z.preprocess(emptyToNull, money.nullable()).default(null);
+
+/**
+ * What the API accepts when an employer creates a job or saves changes to one. Strict: `status`,
+ * `paymentId`, `publishedAt`, `expiresAt`, `employerId` and anything else the server decides are
+ * refused. Empty boxes become null. The limits mirror the CHECK constraints in migration 0002.
+ * (Completeness for publishing is checked separately: a draft may be unfinished.)
+ */
+export const jobInputSchema = z
+  .object({
+    title: singleLine(JOB_LIMITS.titleMax).refine((v) => v.length > 0, 'Enter a job title.'),
+    description: multiLine(JOB_LIMITS.descriptionMax).refine((v) => v.length > 0, 'Describe the job.'),
+    careRole: z.enum(CARE_ROLES, { error: 'Choose a role.' }),
+    employmentType: z.enum(EMPLOYMENT_TYPES, { error: 'Choose an employment type.' }),
+    city: singleLine(100).refine((v) => v.length > 0, 'Enter a city.'),
+    state: singleLine(50).refine((v) => v.length > 0, 'Enter a state.'),
+    zip: z.preprocess(emptyToNull, z.string().trim().regex(/^\d{5}(-\d{4})?$/, 'Enter a valid ZIP code').nullable()).default(null),
+    payMin: optionalNumber,
+    payMax: optionalNumber,
+    payPeriod: z.preprocess(emptyToNull, z.enum(PAY_PERIODS, { error: 'Choose a pay period.' }).nullable()).default(null),
+    easyApply: z.boolean().default(true),
+  })
+  .strict()
+  .refine(payRangeOk, payRangeIssue);
+
+/** What the API returns for a validated body. */
+export type JobInput = z.infer<typeof jobInputSchema>;
+/** What a client may send (optional fields may be left out or empty). */
+export type JobInputBody = z.input<typeof jobInputSchema>;
+
 /** Field names exactly as job_missing_fields() returns them. */
 export type JobField = 'title' | 'description' | 'care_role' | 'employment_type' | 'city' | 'state' | 'pay_period';
+
+/** One job in a list (the employer dashboard). */
+export const jobSummarySchema = z.object({
+  id: z.uuid(),
+  title: z.string(),
+  status: z.enum(JOB_STATUSES),
+  careRole: z.enum(CARE_ROLES),
+  employmentType: z.enum(EMPLOYMENT_TYPES),
+  city: z.string(),
+  state: z.string(),
+  publishedAt: z.string().nullable(),
+  expiresAt: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+/** One job in full, with what is still missing before it could be published. */
+export const jobDetailSchema = jobSummarySchema.extend({
+  description: z.string(),
+  zip: z.string().nullable(),
+  payMin: z.number().nullable(),
+  payMax: z.number().nullable(),
+  payPeriod: z.enum(PAY_PERIODS).nullable(),
+  easyApply: z.boolean(),
+  /** Names as job_missing_fields() returns them. Empty when the job is complete. */
+  missingFields: z.array(z.string()),
+});
+
+export const jobListSchema = z.object({ jobs: z.array(jobSummarySchema) });
+
+export type JobSummary = z.infer<typeof jobSummarySchema>;
+export type JobDetail = z.infer<typeof jobDetailSchema>;
 
 export interface JobCompletenessInput {
   title?: string | null;

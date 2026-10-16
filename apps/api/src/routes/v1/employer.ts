@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { companyProfileInputSchema, type CompanyProfileResponse } from '@healthhyr/shared';
-import { notFound, unauthorized } from '../../errors';
+import { HttpError, notFound, unauthorized } from '../../errors';
 import { requireRole } from '../../middleware/requireRole';
 
 // Database columns, written out so nothing else is ever selected or returned.
@@ -73,7 +73,12 @@ export const employerRouter = Router()
       .select(COLUMNS)
       .maybeSingle();
 
-    if (error) throw new Error('Could not save the company profile', { cause: error });
+    if (error) {
+      // The shared schema mirrors the database's CHECK constraints, so this is not expected. If the
+      // database refuses a value anyway, the person gets a friendly answer, not the database's words.
+      if (error.code === '23514') throw new HttpError(400, 'validation_error', 'One of the values is not allowed.');
+      throw new Error('Could not save the company profile', { cause: error });
+    }
     // No row means the database refused the change (or there is no profile): nothing was saved.
     if (!data) throw notFound();
     res.json(toResponse(data as unknown as CompanyRow));

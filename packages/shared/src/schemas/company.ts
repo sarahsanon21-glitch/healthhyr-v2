@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { emptyToNull, multiLine, singleLine } from './text';
 
 /** Company sizes an employer can choose from. */
 export const COMPANY_SIZES = ['1-10', '11-50', '51-200', '201-500', '501-1000', '1000+'] as const;
@@ -24,11 +25,8 @@ export const PUBLIC_COMPANY_FIELDS = [
   'state',
 ] as const;
 
-// An empty box means "nothing", so it is stored as null rather than an empty string.
-const emptyToNull = (value: unknown): unknown => (typeof value === 'string' && value.trim() === '' ? null : value);
-
-const optionalText = (max: number) =>
-  z.preprocess(emptyToNull, z.string().trim().max(max, `Use ${max} characters or fewer.`).nullable()).default(null);
+// The limits mirror the CHECK constraints in migration 0002_text_constraints.sql.
+const optionalLine = (max: number) => z.preprocess(emptyToNull, singleLine(max).nullable()).default(null);
 
 /**
  * What an employer may change on their own company profile. Strict: any other field is refused, so
@@ -37,8 +35,8 @@ const optionalText = (max: number) =>
  */
 export const companyProfileInputSchema = z
   .object({
-    companyName: z.string().trim().min(1, 'Enter your company name.').max(120, 'Use 120 characters or fewer.'),
-    description: optionalText(5000),
+    companyName: singleLine(120).refine((name) => name.length > 0, 'Enter your company name.'),
+    description: z.preprocess(emptyToNull, multiLine(5000).nullable()).default(null),
     website: z
       .preprocess(
         emptyToNull,
@@ -48,10 +46,10 @@ export const companyProfileInputSchema = z
           .nullable(),
       )
       .default(null),
-    industry: optionalText(100),
+    industry: optionalLine(100),
     companySize: z.preprocess(emptyToNull, z.enum(COMPANY_SIZES, { error: 'Choose a size from the list.' }).nullable()).default(null),
-    city: optionalText(100),
-    state: optionalText(50),
+    city: optionalLine(100),
+    state: optionalLine(50),
   })
   .strict();
 
