@@ -2,7 +2,7 @@
 
 Approved by the owner on 2026-10-16 after three review rounds. This file is the source of truth if a session resets. Project rules are in `CLAUDE.md`; the palette is in `docs/COLORS.md`. If this file and a later owner instruction disagree, the later instruction wins and this file gets updated in the same commit.
 
-**The database SQL moved out of this file in commit 6.** `supabase/migrations/0001_schema.sql` is now the executable source of truth, and tests keep TypeScript enums and constants in sync with it. Section 5 keeps the design notes and records what testing against a real Supabase database found.
+**The database SQL lives in `supabase/migrations/0001_schema.sql`** (moved out of this file in commit 6). It is the executable source of truth, and tests keep TypeScript enums and constants in sync with it. Section 5 keeps the design notes.
 
 Working rules (from CLAUDE.md): one step at a time, plan first, stop for approval before new code; whole-file rewrites only; run tests before every commit; no fake data; no "verified" claims; Stripe test keys only while building.
 
@@ -25,7 +25,7 @@ Working rules (from CLAUDE.md): one step at a time, plan first, stop for approva
 
 ## 2. Stack and hosting
 
-React 19 + Next.js (App Router) for `apps/web`, Tailwind, Express for `apps/api`, Supabase (Postgres, Auth, Storage), Stripe test mode (hosted Checkout), Zoho SMTP for alert emails, mobile app possible later (it would use the Express API). Express is the only backend and the only place plan limits and Stripe logic live. Next.js is the rendering layer: public pages fetch from public Express endpoints on the server with revalidation; signed-in areas are client components that call Express with the Supabase session token.
+React 19 + Next.js (App Router) for `apps/web`, Tailwind, Express 5 for `apps/api`, Supabase (Postgres, Auth, Storage), Stripe test mode (hosted Checkout), Zoho SMTP for alert emails, mobile app possible later (it would use the Express API). Express is the only backend and the only place plan limits and Stripe logic live. Next.js is the rendering layer: public pages fetch from public Express endpoints on the server with revalidation; signed-in areas are client components that call Express with the Supabase session token.
 
 ### Hosting cost (estimates, verify current prices before choosing providers)
 
@@ -62,11 +62,17 @@ healthhyr-v2/
 │     ├─ app/sitemap.ts, robots.ts, layout.tsx
 │     ├─ components/ui/  base components; components/ feature components
 │     └─ lib/            api client, supabase client (anon key only), seo/jobPostingJsonLd.ts, seo/canonical.ts
-├─ apps/api/src/
-│  ├─ routes/            jobs, applications, payments, webhooks, messages, contact, admin
-│  ├─ middleware/        auth (Supabase JWT), validate, rateLimit, requireRole
-│  ├─ services/          stripe, checkout, publish, mailer (Zoho SMTP), notifications, jobs (expire, reconcile, retry alerts)
-│  └─ lib/               supabaseAdmin (service role), env validation, live-key gate
+├─ apps/api/
+│  ├─ src/
+│  │  ├─ env.ts          the ONLY place process.env and server-only secrets are read (zod, fails fast)
+│  │  ├─ app.ts          createApp(): middleware order, no secrets passed in
+│  │  ├─ server.ts       entry point: load config, wire, listen
+│  │  ├─ auth/           verifyToken.ts (JWKS, asymmetric algorithms only)
+│  │  ├─ middleware/     requestId, auth (token, then role from the database), requireRole, errorHandler, security (CORS, rate limit)
+│  │  ├─ lib/            userClient.ts (per-request, RLS applies), serviceClient.ts (bypasses RLS, server-only)
+│  │  ├─ routes/         health, me, stripeWebhook (reserved); later jobs, applications, payments, messages, contact, admin
+│  │  └─ services/       server-only operations, the only code allowed to use the service client: stripe, checkout, publish, mailer, notifications, jobs (expire, reconcile)
+│  └─ tests/             supertest suites, boot test, service-role scanner, integration/ (real Supabase)
 └─ supabase/
    ├─ config.toml        local stack: database and auth only (storage and the rest are off until needed)
    ├─ migrations/        0001_schema.sql (executable source of truth for the schema)
@@ -75,7 +81,7 @@ healthhyr-v2/
       └─ mutation.mjs    proves the tests fail when a policy, guard or grant is weakened
 ```
 
-Secrets rule: `.env` files are never committed; only `.env.example` files are. The Supabase service-role key and the Stripe secret key exist only in the API's environment. The web app gets only the public Supabase URL and anon key, plus the API base URL. It holds no Stripe keys (hosted Checkout).
+Secrets rule: `.env` files are never committed; only `.env.example` files are. The Supabase service-role key and the Stripe secret key exist only in the API's environment, and in the API only `env.ts` reads them. The web app gets only the public Supabase URL and anon key, plus the API base URL. It holds no Stripe keys (hosted Checkout).
 
 ## 4. Design tokens, base components, contrast
 
@@ -101,7 +107,7 @@ Base components (`components/ui/`, built in commits 4 and 5): Button, IconButton
 
 ## 5. Database design
 
-The SQL is `supabase/migrations/0001_schema.sql`. It was written from this plan, then corrected by testing against a real local Supabase (section 5.3).
+The SQL is `supabase/migrations/0001_schema.sql`. It was written from the first version of this plan, then corrected by testing against a real local Supabase (section 5.3).
 
 ### 5.1 Tables (17)
 
@@ -136,7 +142,42 @@ Fixed in `0001_schema.sql` before the first commit of the migration:
 
 `subscriptions.current_period_start`; `jobs.subscription_id` for counting the 30-posts-per-period allowance, enforced in a server-only SQL function; an `invitations` table (invite candidates to apply); directory query endpoint with an explicit column allowlist (no contact fields); filters by role, certifications, availability, preferred shifts and city/state (no distance).
 
-## 6. Server flows (Express)
+## 6. API design and server flows (Express)
+
+### 6.0 API rules (commit 7)
+
+**Which Supabase client (the central rule).**
+
+- **User-initiated reads and writes use `req.auth.db`**: a per-request Supabase client built with the anon key and the caller's own JWT (`src/lib/userClient.ts`). Postgres runs the query as that user, so row-level security and the column privileges apply. This is the default for every route that serves a signed-in person.
+- **The service-role client (`src/lib/serviceClient.ts`) bypasses RLS** and is for server-only operations that no user performs directly: Stripe webhooks, `publish_job` and the other server-only SQL functions, expiry and reconcile jobs, and audited admin actions. That code lives in `src/services/`.
+- **Any endpoint that needs the service client checks ownership in code**, because the database will not.
+- **A test enforces it.** `apps/api/tests/service-role-scan.test.ts` scans the API source and fails if a route, middleware or `app.ts` imports the service-role client without a `// service-role-allowed: <reason>` comment (the reason is required). It also fails if the service-role key is named outside `env.ts`, `server.ts` and `lib/serviceClient.ts`, if `process.env` is read outside `env.ts` and `server.ts`, or if the Stripe secret key is named outside them.
+- **User actions that must use the service role by design.** The schema makes some writes API-only, so these routes carry an allow comment, check the caller's role and ownership in code, and have a test that a stranger is refused:
+  - apply to a job (application inserts are API-only, so the API can copy the resume and enforce limits)
+  - withdraw an application (also deletes the stored resume)
+  - start checkout, cancel checkout, close and reopen a job (server-only SQL functions)
+  - submit the contact form (inserts are API-only so the API can rate-limit and audit)
+  - audited admin reads and actions
+
+**Authentication** (`middleware/auth.ts`, `auth/verifyToken.ts`):
+
+1. The token must be `Authorization: Bearer <jwt>`.
+2. It is verified against the project's published public keys (JWKS): signature, expiry (5 seconds of clock tolerance), not-before, issuer, audience, and the presence of `exp`, `iat` and `sub`. Only asymmetric algorithms (ES256, RS256) are accepted, so `alg: none` and HMAC tricks are refused. Supabase's own anon and service-role keys are not user tokens and are refused. Anonymous sign-ins are not used.
+3. The role is then read from the `profiles` table through the per-request client. It is **never** taken from the token or from anything the client sends, and it is read again on every request, so a role change in the database applies to existing tokens at once.
+4. A valid token with no profile row gets `403 no_profile`. An expired token gets `401 token_expired`; any other bad token gets `401 invalid_token`.
+5. `requireRole(...)` allows only the listed roles. If authentication did not run, it answers 401, so a mistake in route order fails closed.
+
+Projects still using a shared-secret (HS256) JWT would need to move to Supabase's signing keys, which is the default for new projects and for the local stack.
+
+**Errors** (`middleware/errorHandler.ts`): one handler. A response never contains a stack trace, file path, SQL, database error text, or anything the caller sent. Known errors (`HttpError`, validation, bad JSON, body too large) get fixed friendly messages. Everything else is a generic 500 with a request id. The full error, including Supabase's plain-object errors, goes to the server log with the same request id. Every response carries `X-Request-Id`.
+
+**Security middleware** (`app.ts` order): request id, helmet, the Stripe webhook route, health, CORS allowlist, per-IP rate limit (draft-7 headers, 429 JSON), JSON parser (100 KB), the `/api` router (authenticate, then routes), JSON 404, error handler.
+
+- **CORS allowlist:** a browser request from an unlisted origin gets 403, not just missing headers. Requests with no `Origin` (Stripe, curl, servers) pass. Credentials are off (bearer tokens, no cookies). Production requires an explicit list.
+- **Rate limiting** counts failed and successful requests alike, so token guessing is throttled. `strictLimiter` is there for expensive endpoints later.
+- **Stripe webhook route** `POST /api/webhooks/stripe` is mounted before CORS, the rate limit and the JSON parser, with a raw 1 MB body parser, so signature verification (step 16) gets the exact bytes Stripe sent. It needs no sign-in and is not throttled. Until it is built it answers 501.
+
+**Configuration** (`env.ts`): validated with zod at boot. The process exits with code 1 and names every problem, never printing a value. It refuses a live Stripe key outside production, and in production requires https, an explicit CORS list and an explicit port.
 
 ### Checkout: `POST /api/jobs/:id/checkout`
 1. Caller must own the job. If the job already has a `succeeded`, unconsumed payment, publish it instead of charging again.
@@ -153,7 +194,7 @@ Fixed in `0001_schema.sql` before the first commit of the migration:
 - `POST /api/jobs/:id/close`: `published` -> `closed` (no refund).
 - `POST /api/jobs/:id/reopen`: `reopen_job` applies the rules in section 1.
 
-### Stripe webhook: `POST /api/webhooks/stripe`
+### Stripe webhook handler (step 16)
 1. Verify the signature against the raw body. Invalid: 400.
 2. Insert the event (`on conflict do nothing`) and increment `attempts`. Already processed: 200, no work.
 3. Run the handler:
@@ -183,7 +224,7 @@ Fixed in `0001_schema.sql` before the first commit of the migration:
 `POST /api/applications/:id/withdraw` sets the status to `withdrawn`. The guard trigger clears `resume_url` and `cover_note` for every caller, and the CHECK constraint enforces it. The API then deletes the private-bucket resume copy, and a cleanup job removes any stored copy whose application has no `resume_url`. Employers lose access to the applicant's profile and name and see "Applicant withdrew". A resume an employer already downloaded cannot be recalled, so copy must not promise that.
 
 ### Legal text and live-key gate
-`shared/src/legal/terms.md` and `privacy.md` carry `status: draft` until the owner supplies the text. While a document is draft, its page shows a "Draft" banner and `noindex` and is left out of the sitemap. The API refuses to boot with a live Stripe key (`sk_live_`, `rk_live_`) if either document is draft or `NODE_ENV` is not production. No legal text is written by the assistant.
+`shared/src/legal/terms.md` and `privacy.md` carry `status: draft` until the owner supplies the text. While a document is draft, its page shows a "Draft" banner and `noindex` and is left out of the sitemap. The API refuses to boot with a live Stripe key (`sk_live_`, `rk_live_`) if either document is draft or `NODE_ENV` is not production. The `NODE_ENV` half is built (commit 7); the draft-document half comes in step 18. No legal text is written by the assistant.
 
 ### Hiring Pro launch notification
 Admin-only `announce-hiring-pro` refuses to run until `HIRING_PRO_ENABLED` is true and a Hiring Pro price exists. It inserts one in-app notification per seeker with `is_visible = true` (`on conflict do nothing`, so it is safe to run twice) and writes an audit row. In-app only; email to seekers would need a provider.
@@ -228,18 +269,18 @@ Terms and Privacy: ship as pages marked Draft with `noindex` until the owner sup
 | 4 | Base components, part 1 | Component tests | done |
 | 5 | Base components, part 2 | Component tests | done |
 | 6 | Migration `0001_schema.sql`, local Supabase, RLS test suite, mutation runner | 158 RLS tests against real Supabase; 16 mutations proven caught | done |
-| 7 | API skeleton: env validation, JWT auth, `requireRole`, errors, rate limit | 401 and 403 | |
+| 7 | API skeleton: env validation, JWT auth, `requireRole`, errors, rate limit, helmet, CORS, reserved webhook route, client design rule | 113 API tests (supertest, boot, scanner) and 9 against real Supabase tokens | done |
 | 8 | Auth in web | Role comes from the profile, never the client | |
-| 9 | Seeker profile CRUD, `seeker_private`, visibility switch with the approved copy, preferred shifts | Default off, opt-in stamp, contact details owner-only | |
+| 9 | Seeker profile CRUD, `seeker_private`, visibility switch with the approved copy, preferred shifts. Turns on the Supabase Data API (PostgREST) locally so the per-request client works end to end | Default off, opt-in stamp, contact details owner-only, RLS applies through the API | |
 | 10 | Employer company profile and public company page | 404 until renamed, stable slug | |
 | 11 | Jobs: draft CRUD, dashboard, close and reopen | Reopen rules, employers cannot set status or dates | |
 | 12 | Public job search and detail | Expired, unpublished and unlisted jobs never returned | |
 | 13 | SEO: JSON-LD, canonical, sitemap, robots | JSON-LD fields, expired noindex | |
 | 14 | Checkout endpoint with `start_checkout` precheck | Unlisted employer refused, missing fields listed, wrong status refused, one open payment per job, server price | |
 | 15 | Cancel checkout, edit lock while `pending_payment`, session expiry handling | Cancel returns the job to draft, edits blocked while pending and allowed after cancel, cancel refused when paid | |
-| 16 | Stripe webhook, `publish_job`, expiry job, page revalidation | Webhook tests (section 10) | |
+| 16 | Stripe webhook handler, `publish_job`, expiry job, page revalidation | Webhook tests (section 10) | |
 | 17 | Email service (Zoho SMTP) and alert retry job | Stub transport, header sanitizing, retry of unsent alerts | |
-| 18 | Permanent-failure path, reconcile job, live-key gate | `needs_review` and refund path, retry cap, gate tests | |
+| 18 | Permanent-failure path, reconcile job, live-key gate (legal drafts) | `needs_review` and refund path, retry cap, gate tests | |
 | 19 | Saved jobs, applications, Easy Apply, withdrawal | One application per job, withdrawal clears data and deletes the stored resume | |
 | 20 | Employer applicant review (five statuses) | Status rules, withdrawn shows status only | |
 | 21 | Messages and notifications | `can_message` rules, read-once | |
@@ -251,7 +292,7 @@ Terms and Privacy: ship as pages marked Draft with `noindex` until the owner sup
 | 27 | Admin: moderation, contact inbox, `needs_review` payments with retry and refund | Every action writes an audit row, non-admins blocked | |
 | 28 | Hardening: accessibility, banned-phrase scan | Full suite | |
 
-Storage (resume uploads) is turned off in `supabase/config.toml` and gets turned on in step 19.
+Storage (resume uploads) is turned off in `supabase/config.toml` and gets turned on in step 19. The Data API (PostgREST) is turned off and gets turned on in step 9.
 
 ## 10. Tests
 
@@ -273,7 +314,21 @@ Storage (resume uploads) is turned off in `supabase/config.toml` and gets turned
 
 `npm run test:rls:mutation` weakens one policy, guard, grant or function at a time (inside each test's own transaction, so nothing real changes) and checks that the right tests fail. 16 weakenings are caught. Two more confirm defense in depth: widening a column privilege alone is not noticed because a trigger still blocks the write, and removing both is.
 
-### Webhook tests (steps 16 and 18)
+### API tests (step 7): 113 unit and process tests, plus 9 against real Supabase
+
+| Suite | Tests | Covers |
+|---|---|---|
+| `env` | 13 | Valid config and defaults; every missing or malformed variable named; live Stripe key refused outside production; production rules; no value is ever printed |
+| `auth` | 32 | 401 for no token, malformed headers, garbage, expired, wrong key (with and without the right key id), unknown key id, altered payload, wrong audience or issuer, no expiry, not-yet-valid, `alg: none`, HMAC with the public key, anon and service-role tokens, anonymous users, bad subject; role from the database and never from the token, header, query or body; re-read on every request; no profile is 403; database errors; the per-request client gets the caller's token only after verification |
+| `roles` | 8 | `requireRole`: allowed and refused roles, 401 without a token, fails closed if mounted without authentication |
+| `errors` | 16 | Generic 500 with no message, stack, SQL or path (sync, async, non-Error, database-style fields); full error only in the server log with the request id and never the token; same in every `NODE_ENV`; validation, bad JSON, too large, 404 are friendly and do not echo input; request ids |
+| `security` | 14 | helmet headers; CORS allowlist (allowed, refused, preflight, no wildcard, no Origin); rate limit 429 with Retry-After, counts failures, health not throttled |
+| `webhook` | 12 | Raw body byte for byte (including non-ASCII), parsed everywhere else, no sign-in, not throttled, no origin check, POST only, 1 MB limit, reserved 501 handler |
+| `service-role-scan` | 15 | The scanner catches each kind of violation, accepts only an allow comment with a reason, and the real source is clean |
+| `boot` | 3 | The real server process exits with code 1 on missing or live-key config without printing a value, and starts and serves `/health` when valid |
+| `integration` (real Supabase) | 9 | A token issued by real GoTrue is signed ES256 with the expected issuer and audience; our verifier accepts it, refuses altered signature and payload, the wrong issuer or audience, and the project's own anon key; signup with `role: admin` in its metadata still creates a `seeker`; `/api/me` returns the database role |
+
+### Webhook handler tests (steps 16 and 18)
 - Bad signature returns 400. Success returns 200 and sets `processed_at`.
 - A handler that throws returns 500, stores the error and leaves `processed_at` null. The retry returns 200.
 - A duplicate of a finished event returns 200 with no second publish. An unhandled type returns 200 and is recorded as ignored.
@@ -290,8 +345,8 @@ Storage (resume uploads) is turned off in `supabase/config.toml` and gets turned
 - `.gitignore` ignores `.env`, `.env.*` (except `.env.example`), `node_modules`, build output and coverage.
 - Only `.env.example` files are committed, with placeholder values.
 - Local Supabase keys (printed by `npm run db:status`) go only in git-ignored `.env` files. A hygiene test fails if a key-like string is committed.
-- Root `.env`: `RLS_DATABASE_URL` (the local database URL, used by the RLS tests).
-- API only: `SUPABASE_SERVICE_ROLE_KEY`, `STRIPE_SECRET_KEY` (test keys while building), `STRIPE_WEBHOOK_SECRET`, `SMTP_*`, `ALERT_FROM`, `ALERT_TO`, `HIRING_PRO_ENABLED`.
+- Root `.env` (tests only): `RLS_DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`.
+- `apps/api/.env` (see `apps/api/.env.example`), server-only: `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWKS_URL`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`, `STRIPE_SECRET_KEY` (test keys while building), `STRIPE_WEBHOOK_SECRET`, `CORS_ALLOWED_ORIGINS`, `TRUST_PROXY`, `RATE_LIMIT_*`, `PORT`. Later: `SMTP_*`, `ALERT_FROM`, `ALERT_TO`, `HIRING_PRO_ENABLED`.
 - Web: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, API base URL. No Stripe keys, no service-role key.
 - A hygiene test fails if a `.env` file is tracked, if a secret-looking string is committed, or if web code references the service-role or Stripe secret key names.
 
@@ -299,8 +354,13 @@ Storage (resume uploads) is turned off in `supabase/config.toml` and gets turned
 
 - Requires Docker. The Supabase CLI is a dev dependency (`npx supabase`), not a global install.
 - `npm run db:start` starts the database and auth (about 2 GB of Docker images the first time). `npm run db:reset` re-applies migrations. `npm run db:stop` stops it. `npm run db:status` prints the URLs and keys.
-- `npm test` runs everything, including the RLS suites, and fails with instructions if the database is not running. `npm run test:fast` skips the RLS suites.
+- `npm test` runs everything, including the RLS and integration suites, and fails with instructions if the database is not running. `npm run test:fast` skips them.
 - Ports 54321 to 54329, so it does not clash with other local Postgres, Redis or MinIO containers.
+
+### Running the API
+
+- `npm run dev -w @healthhyr/api` (watch mode) or `npm run start -w @healthhyr/api`, with `apps/api/.env` filled in.
+- The server logs one JSON line per event. `PORT=0` picks a free port (not allowed in production).
 
 ## 12. Assumptions the owner approved
 

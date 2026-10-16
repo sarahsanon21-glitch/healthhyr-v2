@@ -8,6 +8,8 @@ export default defineConfig({
           name: 'node',
           environment: 'node',
           include: ['tests/**/*.test.ts', 'packages/*/tests/**/*.test.ts', 'apps/*/tests/**/*.test.ts'],
+          // These need the local Supabase and have their own projects below.
+          exclude: ['apps/api/tests/integration/**', 'node_modules/**'],
         },
       },
       './apps/web/vitest.config.ts',
@@ -18,6 +20,17 @@ export default defineConfig({
           environment: 'node',
           include: ['supabase/tests/rls/**/*.test.ts'],
           globalSetup: ['./supabase/tests/rls/global-setup.ts'],
+          testTimeout: 30_000,
+          hookTimeout: 30_000,
+        },
+      },
+      {
+        // Real GoTrue tokens against the real local Supabase. Needs SUPABASE_URL and SUPABASE_ANON_KEY in .env.
+        test: {
+          name: 'api-integration',
+          environment: 'node',
+          include: ['apps/api/tests/integration/**/*.test.ts'],
+          globalSetup: ['./apps/api/tests/integration/global-setup.ts'],
           testTimeout: 30_000,
           hookTimeout: 30_000,
         },
