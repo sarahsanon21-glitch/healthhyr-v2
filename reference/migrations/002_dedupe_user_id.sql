@@ -1,0 +1,37 @@
+-- ============================================================================
+-- 002_dedupe_user_id.sql                 NO-OP. Nothing to run.
+--
+-- This migration was reserved to delete duplicate user_id rows from
+-- `subscriptions` and `employer_profiles` so that 003 could add UNIQUE
+-- constraints to both tables.
+--
+-- 000c_preflight_duplicates.sql was run on 2026-09-26 and found none:
+--
+--   C1  subscriptions      total_rows 1, distinct_user_ids 1,
+--                          null_user_ids 0, duplicate_user_ids 0
+--   C3  employer_profiles  total_rows 1, distinct_user_ids 1,
+--                          null_user_ids 0, duplicate_user_ids 0
+--
+-- C2 and C4 (the per-row KEEP/DELETE verdicts) returned nothing to review,
+-- because neither table has a duplicate set. So there is nothing to delete and
+-- 003 can add both constraints directly.
+--
+-- The file is kept rather than deleted so the migration sequence stays
+-- gapless and the reason for the gap is on the record. Running it does
+-- nothing.
+--
+-- If this ever needs to be revived — for example if a second environment
+-- turns out to have duplicates — the dedupe rule agreed on 2026-09-26 was:
+--
+--   subscriptions      keep the row with a non-null stripe_subscription_id;
+--                      if several or none qualify, keep the most recently
+--                      updated (updated_at, then created_at, then id)
+--   employer_profiles  keep the most recently updated
+--
+-- 000c encodes exactly that ordering in its C2/C4 window functions, so the
+-- DELETE would be: delete the rows those queries label 'DELETE'.
+-- ============================================================================
+
+-- Intentionally empty. Re-run 000c against any new environment before
+-- assuming this is still a no-op there.
+SELECT 'no-op: 000c found no duplicate user_id rows on 2026-09-26' AS note;

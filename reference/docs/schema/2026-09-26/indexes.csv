@@ -1,0 +1,37 @@
+table_name,indexes
+application_answers,"application_answers_pkey: CREATE UNIQUE INDEX application_answers_pkey ON public.application_answers USING btree (id)
+idx_application_answers_application_id: CREATE INDEX idx_application_answers_application_id ON public.application_answers USING btree (application_id)"
+application_status_notifications,"application_status_notifications_pkey: CREATE UNIQUE INDEX application_status_notifications_pkey ON public.application_status_notifications USING btree (id)
+idx_status_notif_worker_id: CREATE INDEX idx_status_notif_worker_id ON public.application_status_notifications USING btree (worker_id)"
+applications,"applications_job_id_worker_id_key: CREATE UNIQUE INDEX applications_job_id_worker_id_key ON public.applications USING btree (job_id, worker_id)
+applications_pkey: CREATE UNIQUE INDEX applications_pkey ON public.applications USING btree (id)
+applications_unique_worker_job: CREATE UNIQUE INDEX applications_unique_worker_job ON public.applications USING btree (worker_id, job_id)"
+certification_details,certification_details_pkey: CREATE UNIQUE INDEX certification_details_pkey ON public.certification_details USING btree (id)
+chat_messages,"chat_messages_pkey: CREATE UNIQUE INDEX chat_messages_pkey ON public.chat_messages USING btree (id)
+idx_chat_messages_conversation_id: CREATE INDEX idx_chat_messages_conversation_id ON public.chat_messages USING btree (conversation_id)"
+contact_messages,contact_messages_pkey: CREATE UNIQUE INDEX contact_messages_pkey ON public.contact_messages USING btree (id)
+conversations,"conversations_employer_id_worker_id_job_id_key: CREATE UNIQUE INDEX conversations_employer_id_worker_id_job_id_key ON public.conversations USING btree (employer_id, worker_id, job_id)
+conversations_pkey: CREATE UNIQUE INDEX conversations_pkey ON public.conversations USING btree (id)
+idx_conversations_employer_id: CREATE INDEX idx_conversations_employer_id ON public.conversations USING btree (employer_id)
+idx_conversations_worker_id: CREATE INDEX idx_conversations_worker_id ON public.conversations USING btree (worker_id)"
+education,education_pkey: CREATE UNIQUE INDEX education_pkey ON public.education USING btree (id)
+employer_profiles,employer_profiles_pkey: CREATE UNIQUE INDEX employer_profiles_pkey ON public.employer_profiles USING btree (id)
+interviews,"idx_interviews_application_id: CREATE INDEX idx_interviews_application_id ON public.interviews USING btree (application_id)
+interviews_pkey: CREATE UNIQUE INDEX interviews_pkey ON public.interviews USING btree (id)"
+job_questions,"idx_job_questions_job_id: CREATE INDEX idx_job_questions_job_id ON public.job_questions USING btree (job_id)
+job_questions_pkey: CREATE UNIQUE INDEX job_questions_pkey ON public.job_questions USING btree (id)"
+jobs,jobs_pkey: CREATE UNIQUE INDEX jobs_pkey ON public.jobs USING btree (id)
+licenses,licenses_pkey: CREATE UNIQUE INDEX licenses_pkey ON public.licenses USING btree (id)
+notifications,notifications_pkey: CREATE UNIQUE INDEX notifications_pkey ON public.notifications USING btree (id)
+push_subscriptions,"idx_push_subscriptions_user_id: CREATE INDEX idx_push_subscriptions_user_id ON public.push_subscriptions USING btree (user_id)
+push_subscriptions_endpoint_key: CREATE UNIQUE INDEX push_subscriptions_endpoint_key ON public.push_subscriptions USING btree (endpoint)
+push_subscriptions_pkey: CREATE UNIQUE INDEX push_subscriptions_pkey ON public.push_subscriptions USING btree (id)"
+reviews,reviews_pkey: CREATE UNIQUE INDEX reviews_pkey ON public.reviews USING btree (id)
+subscriptions,subscriptions_pkey: CREATE UNIQUE INDEX subscriptions_pkey ON public.subscriptions USING btree (id)
+users,"users_email_key: CREATE UNIQUE INDEX users_email_key ON public.users USING btree (email)
+users_pkey: CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)"
+webhook_events,webhook_events_pkey: CREATE UNIQUE INDEX webhook_events_pkey ON public.webhook_events USING btree (id)
+work_experience,work_experience_pkey: CREATE UNIQUE INDEX work_experience_pkey ON public.work_experience USING btree (id)
+worker_languages,worker_languages_pkey: CREATE UNIQUE INDEX worker_languages_pkey ON public.worker_languages USING btree (id)
+worker_profiles,"worker_profiles_pkey: CREATE UNIQUE INDEX worker_profiles_pkey ON public.worker_profiles USING btree (id)
+worker_profiles_user_id_unique: CREATE UNIQUE INDEX worker_profiles_user_id_unique ON public.worker_profiles USING btree (user_id)"
