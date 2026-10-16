@@ -1,6 +1,0 @@
-table_name,constraint_name,check_definition
-applications,applications_status_check,"CHECK (((status)::text = ANY ((ARRAY['applied'::character varying, 'under_review'::character varying, 'interview'::character varying, 'offer'::character varying, 'hired'::character varying, 'rejected'::character varying])::text[])))"
-jobs,jobs_job_type_check,"CHECK (((job_type)::text = ANY ((ARRAY['full-time'::character varying, 'part-time'::character varying, 'contract'::character varying, 'per-diem'::character varying])::text[])))"
-jobs,jobs_salary_type_check,"CHECK (((salary_type)::text = ANY ((ARRAY['hourly'::character varying, 'annual'::character varying])::text[])))"
-reviews,reviews_rating_check,CHECK (((rating >= 1) AND (rating <= 5)))
-users,users_role_check,"CHECK (((role)::text = ANY ((ARRAY['worker'::character varying, 'employer'::character varying, 'admin'::character varying])::text[])))"
