@@ -27,8 +27,9 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={`${heading.variable} ${body.variable}`}>
-      <body>
+    // suppressHydrationWarning on <html> and <body> only: browser extensions modify these tags before React loads.
+    <html lang="en" className={`${heading.variable} ${body.variable}`} suppressHydrationWarning>
+      <body suppressHydrationWarning>
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
