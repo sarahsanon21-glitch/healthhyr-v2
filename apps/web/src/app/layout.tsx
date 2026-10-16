@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { DM_Sans, Manrope } from 'next/font/google';
 import type { ReactNode } from 'react';
+import { AuthProvider } from '../lib/auth/AuthProvider';
 import './globals.css';
 
 // Font families, weights and CSS variables must match fonts in packages/shared/src/tokens.ts.
@@ -27,7 +28,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${heading.variable} ${body.variable}`}>
-      <body>{children}</body>
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

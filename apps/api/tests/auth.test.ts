@@ -2,14 +2,15 @@ import { randomUUID } from 'node:crypto';
 import { SignJWT } from 'jose';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { AUDIENCE, ISSUER, expectNoLeak, makeApp, makeKey, signToken } from './helpers/harness';
+import { AUDIENCE, ISSUER, expectNoLeak, makeApp, makeKey, signToken, v1 } from './helpers/harness';
 
 const b64url = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
+const ME = v1('/me');
 
 describe('authentication: the token', () => {
   it('401 with no Authorization header', async () => {
     const { app, recorder } = await makeApp();
-    const res = await request(app).get('/api/me');
+    const res = await request(app).get(ME);
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('unauthorized');
     expect(res.headers['www-authenticate']).toBe('Bearer');
@@ -26,7 +27,7 @@ describe('authentication: the token', () => {
     ['an oversized token', `Bearer ${'a'.repeat(9000)}`],
   ])('401 for %s', async (_name, header) => {
     const { app, recorder } = await makeApp();
-    const res = await request(app).get('/api/me').set('Authorization', header);
+    const res = await request(app).get(ME).set('Authorization', header);
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('unauthorized');
     expect(recorder.clientTokens).toEqual([]);
@@ -34,7 +35,7 @@ describe('authentication: the token', () => {
 
   it('401 invalid_token for a string that is not a JWT', async () => {
     const { app, recorder } = await makeApp();
-    const res = await request(app).get('/api/me').set('Authorization', 'Bearer not-a-jwt');
+    const res = await request(app).get(ME).set('Authorization', 'Bearer not-a-jwt');
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('invalid_token');
     expect(recorder.clientTokens).toEqual([]);
@@ -43,7 +44,7 @@ describe('authentication: the token', () => {
   it('401 token_expired for an expired token', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker', { expiresIn: -3600 });
-    const res = await request(t.app).get('/api/me').set('Authorization', authorization);
+    const res = await request(t.app).get(ME).set('Authorization', authorization);
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('token_expired');
     expect(t.recorder.clientTokens).toEqual([]);
@@ -52,7 +53,7 @@ describe('authentication: the token', () => {
   it('accepts a token that expired a moment ago, within the clock tolerance', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker', { expiresIn: -2 });
-    expect((await request(t.app).get('/api/me').set('Authorization', authorization)).status).toBe(200);
+    expect((await request(t.app).get(ME).set('Authorization', authorization)).status).toBe(200);
   });
 
   it('401 for a token signed with the wrong key, even with the right key id', async () => {
@@ -60,7 +61,7 @@ describe('authentication: the token', () => {
     const userId = randomUUID();
     t.profiles.set(userId, { id: userId, role: 'admin' });
     const forged = await signToken({ ...t.otherKey, kid: t.signingKey.kid }, { sub: userId });
-    const res = await request(t.app).get('/api/me').set('Authorization', `Bearer ${forged}`);
+    const res = await request(t.app).get(ME).set('Authorization', `Bearer ${forged}`);
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('invalid_token');
     expect(t.recorder.clientTokens).toEqual([]);
@@ -71,7 +72,7 @@ describe('authentication: the token', () => {
     const userId = randomUUID();
     t.profiles.set(userId, { id: userId, role: 'admin' });
     const forged = await signToken(t.otherKey, { sub: userId });
-    const res = await request(t.app).get('/api/me').set('Authorization', `Bearer ${forged}`);
+    const res = await request(t.app).get(ME).set('Authorization', `Bearer ${forged}`);
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('invalid_token');
   });
@@ -83,7 +84,7 @@ describe('authentication: the token', () => {
     const { token } = await t.login('seeker');
     const [header, , signature] = token.split('.');
     const tampered = `${header}.${b64url({ sub: victim, role: 'authenticated', iss: ISSUER, aud: AUDIENCE, exp: Math.floor(Date.now() / 1000) + 3600, iat: 1 })}.${signature}`;
-    const res = await request(t.app).get('/api/me').set('Authorization', `Bearer ${tampered}`);
+    const res = await request(t.app).get(ME).set('Authorization', `Bearer ${tampered}`);
     expect(res.status).toBe(401);
   });
 
@@ -92,7 +93,7 @@ describe('authentication: the token', () => {
     const wrongAudience = await t.login('seeker', { audience: 'something-else' });
     const wrongIssuer = await t.login('seeker', { issuer: 'https://evil.example.test/auth/v1' });
     for (const { authorization } of [wrongAudience, wrongIssuer]) {
-      const res = await request(t.app).get('/api/me').set('Authorization', authorization);
+      const res = await request(t.app).get(ME).set('Authorization', authorization);
       expect(res.status).toBe(401);
       expect(res.body.error.code).toBe('invalid_token');
     }
@@ -101,13 +102,13 @@ describe('authentication: the token', () => {
   it('401 for a token with no expiry', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker', { expiresIn: false });
-    expect((await request(t.app).get('/api/me').set('Authorization', authorization)).status).toBe(401);
+    expect((await request(t.app).get(ME).set('Authorization', authorization)).status).toBe(401);
   });
 
   it('401 for a token that is not valid yet', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker', { notBefore: 3600 });
-    expect((await request(t.app).get('/api/me').set('Authorization', authorization)).status).toBe(401);
+    expect((await request(t.app).get(ME).set('Authorization', authorization)).status).toBe(401);
   });
 
   it('401 for an unsigned token (alg: none)', async () => {
@@ -115,7 +116,7 @@ describe('authentication: the token', () => {
     const userId = randomUUID();
     t.profiles.set(userId, { id: userId, role: 'admin' });
     const unsigned = `${b64url({ alg: 'none', typ: 'JWT' })}.${b64url({ sub: userId, role: 'authenticated', iss: ISSUER, aud: AUDIENCE, exp: Math.floor(Date.now() / 1000) + 3600, iat: 1 })}.`;
-    const res = await request(t.app).get('/api/me').set('Authorization', `Bearer ${unsigned}`);
+    const res = await request(t.app).get(ME).set('Authorization', `Bearer ${unsigned}`);
     expect(res.status).toBe(401);
   });
 
@@ -132,7 +133,7 @@ describe('authentication: the token', () => {
       .setIssuedAt()
       .setExpirationTime('1h')
       .sign(secret);
-    const res = await request(t.app).get('/api/me').set('Authorization', `Bearer ${confused}`);
+    const res = await request(t.app).get(ME).set('Authorization', `Bearer ${confused}`);
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('invalid_token');
   });
@@ -149,7 +150,7 @@ describe('authentication: the token', () => {
       await signToken(t.signingKey, { sub: 'not-a-uuid' }),
     ];
     for (const token of bad) {
-      const res = await request(t.app).get('/api/me').set('Authorization', `Bearer ${token}`);
+      const res = await request(t.app).get(ME).set('Authorization', `Bearer ${token}`);
       expect(res.status).toBe(401);
     }
     expect(t.recorder.clientTokens).toEqual([]);
@@ -158,7 +159,7 @@ describe('authentication: the token', () => {
   it('a valid token reaches the route', async () => {
     const t = await makeApp();
     const { authorization, userId } = await t.login('seeker');
-    const res = await request(t.app).get('/api/me').set('Authorization', authorization);
+    const res = await request(t.app).get(ME).set('Authorization', authorization);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ id: userId, role: 'seeker' });
   });
@@ -166,7 +167,7 @@ describe('authentication: the token', () => {
   it('accepts the Bearer scheme in any letter case', async () => {
     const t = await makeApp();
     const { token } = await t.login('seeker');
-    expect((await request(t.app).get('/api/me').set('Authorization', `bearer ${token}`)).status).toBe(200);
+    expect((await request(t.app).get(ME).set('Authorization', `bearer ${token}`)).status).toBe(200);
   });
 });
 
@@ -182,51 +183,51 @@ describe('authentication: the role comes from the database, never from the token
       },
     });
     const me = await request(t.app)
-      .get('/api/me')
+      .get(ME)
       .set('Authorization', authorization)
       .set('X-Role', 'admin')
       .set('X-User-Role', 'admin')
       .query({ role: 'admin' });
     expect(me.body).toEqual({ id: userId, role: 'seeker' });
 
-    const adminRoute = await request(t.app).get('/api/admin-only').set('Authorization', authorization).set('X-Role', 'admin');
+    const adminRoute = await request(t.app).get(v1('/admin-only')).set('Authorization', authorization).set('X-Role', 'admin');
     expect(adminRoute.status).toBe(403);
   });
 
   it('ignores a role in the request body', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).post('/api/echo').set('Authorization', authorization).send({ role: 'admin' });
+    const res = await request(t.app).post(v1('/echo')).set('Authorization', authorization).send({ role: 'admin' });
     expect(res.status).toBe(200);
-    const me = await request(t.app).get('/api/me').set('Authorization', authorization);
+    const me = await request(t.app).get(ME).set('Authorization', authorization);
     expect(me.body.role).toBe('seeker');
   });
 
   it('reads the role again on every request, so a change in the database applies to the same token at once', async () => {
     const t = await makeApp();
     const { authorization, userId } = await t.login('seeker');
-    expect((await request(t.app).get('/api/admin-only').set('Authorization', authorization)).status).toBe(403);
+    expect((await request(t.app).get(v1('/admin-only')).set('Authorization', authorization)).status).toBe(403);
 
     t.profiles.set(userId, { id: userId, role: 'admin' });
-    expect((await request(t.app).get('/api/admin-only').set('Authorization', authorization)).status).toBe(200);
+    expect((await request(t.app).get(v1('/admin-only')).set('Authorization', authorization)).status).toBe(200);
 
     t.profiles.set(userId, { id: userId, role: 'employer' });
-    const me = await request(t.app).get('/api/me').set('Authorization', authorization);
+    const me = await request(t.app).get(ME).set('Authorization', authorization);
     expect(me.body.role).toBe('employer');
-    expect((await request(t.app).get('/api/admin-only').set('Authorization', authorization)).status).toBe(403);
+    expect((await request(t.app).get(v1('/admin-only')).set('Authorization', authorization)).status).toBe(403);
   });
 
   it('looks the profile up by the verified token subject, in the profiles table', async () => {
     const t = await makeApp();
     const { authorization, userId } = await t.login('employer');
-    await request(t.app).get('/api/me').set('Authorization', authorization).set('X-User-Id', randomUUID());
+    await request(t.app).get(ME).set('Authorization', authorization).set('X-User-Id', randomUUID());
     expect(t.recorder.lookups).toEqual([{ table: 'profiles', column: 'id', value: userId }]);
   });
 
   it('403 no_profile for a valid token whose user has no profile row', async () => {
     const t = await makeApp();
     const { authorization } = await t.login(null);
-    const res = await request(t.app).get('/api/me').set('Authorization', authorization);
+    const res = await request(t.app).get(ME).set('Authorization', authorization);
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('no_profile');
     expectNoLeak(res.body);
@@ -235,7 +236,7 @@ describe('authentication: the role comes from the database, never from the token
   it('403 for a profile with a role that does not exist', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('superuser');
-    const res = await request(t.app).get('/api/me').set('Authorization', authorization);
+    const res = await request(t.app).get(ME).set('Authorization', authorization);
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('forbidden');
   });
@@ -243,7 +244,7 @@ describe('authentication: the role comes from the database, never from the token
   it('401 when the database itself rejects the token', async () => {
     const t = await makeApp({ db: { error: { message: 'JWT expired', code: 'PGRST301' } } });
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).get('/api/me').set('Authorization', authorization);
+    const res = await request(t.app).get(ME).set('Authorization', authorization);
     expect(res.status).toBe(401);
     expect(res.body.error.code).toBe('invalid_token');
   });
@@ -251,7 +252,7 @@ describe('authentication: the role comes from the database, never from the token
   it('500 with nothing leaked when the profile lookup fails for any other reason', async () => {
     const t = await makeApp({ db: { error: { message: 'relation "profiles" does not exist: password authentication failed', code: '42P01' } } });
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).get('/api/me').set('Authorization', authorization);
+    const res = await request(t.app).get(ME).set('Authorization', authorization);
     expect(res.status).toBe(500);
     expect(res.body.error.code).toBe('internal_error');
     expectNoLeak(res.body);
@@ -267,24 +268,24 @@ describe('authentication: the per-request client carries the user’s own token'
     const t = await makeApp();
     const a = await t.login('seeker');
     const b = await t.login('employer');
-    await request(t.app).get('/api/me').set('Authorization', a.authorization);
-    await request(t.app).get('/api/me').set('Authorization', b.authorization);
-    await request(t.app).get('/api/me').set('Authorization', a.authorization);
+    await request(t.app).get(ME).set('Authorization', a.authorization);
+    await request(t.app).get(ME).set('Authorization', b.authorization);
+    await request(t.app).get(ME).set('Authorization', a.authorization);
     expect(t.recorder.clientTokens).toEqual([a.token, b.token, a.token]);
   });
 
   it('never creates a client for a request that failed authentication', async () => {
     const t = await makeApp();
-    await request(t.app).get('/api/me');
-    await request(t.app).get('/api/me').set('Authorization', 'Bearer garbage');
+    await request(t.app).get(ME);
+    await request(t.app).get(ME).set('Authorization', 'Bearer garbage');
     const wrongKey = await signToken(await makeKey('x'), {});
-    await request(t.app).get('/api/me').set('Authorization', `Bearer ${wrongKey}`);
+    await request(t.app).get(ME).set('Authorization', `Bearer ${wrongKey}`);
     expect(t.recorder.clientTokens).toEqual([]);
   });
 
-  it('guards the whole /api prefix: unknown routes ask for a token first', async () => {
+  it('guards the whole /api/v1 prefix: unknown routes ask for a token first', async () => {
     const t = await makeApp();
-    expect((await request(t.app).get('/api/does-not-exist')).status).toBe(401);
-    expect((await request(t.app).post('/api/anything').send({})).status).toBe(401);
+    expect((await request(t.app).get(v1('/does-not-exist'))).status).toBe(401);
+    expect((await request(t.app).post(v1('/anything')).send({})).status).toBe(401);
   });
 });

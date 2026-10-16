@@ -10,10 +10,14 @@ import { createTokenVerifier } from '../../src/auth/verifyToken';
 import { HttpError } from '../../src/errors';
 import type { Logger } from '../../src/logger';
 import { requireRole } from '../../src/middleware/requireRole';
+import { API_V1 } from '../../src/routes/paths';
 
 export const ISSUER = 'https://project.example.test/auth/v1';
 export const AUDIENCE = 'authenticated';
 export const ALLOWED_ORIGIN = 'https://app.example.test';
+
+/** A path under the versioned prefix: v1('/me') is '/api/v1/me'. */
+export const v1 = (path: string): string => `${API_V1}${path}`;
 
 export interface TestKey {
   kid: string;
@@ -91,12 +95,13 @@ export interface TestApp {
   login: (role?: string | null, options?: TokenOptions) => Promise<{ token: string; userId: string; authorization: string }>;
 }
 
-export interface MakeAppOptions extends Partial<Pick<AppOptions, 'corsOrigins' | 'rateLimit' | 'stripeWebhook' | 'jsonLimit'>> {
+export interface MakeAppOptions
+  extends Partial<Pick<AppOptions, 'corsOrigins' | 'rateLimit' | 'userRateLimit' | 'stripeWebhook' | 'jsonLimit'>> {
   db?: FakeDbOptions;
   registerRoutes?: (api: Router) => void;
 }
 
-/** Routes that exist only for tests, mounted under /api after authentication. */
+/** Routes that exist only for tests, mounted under /api/v1 after authentication. */
 function testRoutes(api: Router): void {
   api.get('/seeker-only', requireRole('seeker'), (_req, res) => void res.json({ ok: true }));
   api.get('/employer-or-admin', requireRole('employer', 'admin'), (_req, res) => void res.json({ ok: true }));
@@ -157,6 +162,7 @@ export async function makeApp(options: MakeAppOptions = {}): Promise<TestApp> {
     corsOrigins: options.corsOrigins ?? [ALLOWED_ORIGIN],
     trustProxy: 0,
     rateLimit: options.rateLimit ?? { windowMs: 60_000, max: 1000 },
+    userRateLimit: options.userRateLimit ?? { windowMs: 60_000, max: 1000 },
     verifyToken: createTokenVerifier({ keys: createLocalJWKSet({ keys: [signingKey.publicJwk] }), issuer: ISSUER, audience: AUDIENCE }),
     createUserClient: fakeUserClient(profiles, recorder, options.db ?? {}),
     logger,

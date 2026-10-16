@@ -1,6 +1,7 @@
+import { mailCatcherIsUp } from '../../../../tests/support/mailpit';
 import { supabaseEnv } from './env';
 
-// Fails fast, with instructions, when the local Supabase is not running.
+// Fails fast, with instructions, when the local Supabase or its mail catcher is not running.
 export default async function setup(): Promise<void> {
   const { url } = supabaseEnv();
   try {
@@ -13,6 +14,12 @@ export default async function setup(): Promise<void> {
       `API integration tests need the local Supabase (${url}). ${(error as Error).message}\n` +
         'Start it with: npm run db:start',
       { cause: error },
+    );
+  }
+  if (!(await mailCatcherIsUp())) {
+    throw new Error(
+      'API integration tests need the local mail catcher (sign-up needs an emailed code). ' +
+        'It starts with the local Supabase: npm run db:start. Check [local_smtp] in supabase/config.toml.',
     );
   }
 }

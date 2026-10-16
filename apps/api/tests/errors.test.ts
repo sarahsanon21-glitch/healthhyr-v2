@@ -1,12 +1,12 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { expectNoLeak, makeApp } from './helpers/harness';
+import { expectNoLeak, makeApp, v1 } from './helpers/harness';
 
 describe('error responses never leak', () => {
   it('a thrown Error becomes a generic 500: no message, stack, SQL or file path', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).get('/api/boom').set('Authorization', authorization);
+    const res = await request(t.app).get(v1('/boom')).set('Authorization', authorization);
     expect(res.status).toBe(500);
     expect(res.body).toEqual({
       error: { code: 'internal_error', message: 'Something went wrong on our side. Please try again.', requestId: expect.any(String) },
@@ -17,7 +17,7 @@ describe('error responses never leak', () => {
   it('an async rejection with database-style fields leaks none of them', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).get('/api/boom-async').set('Authorization', authorization);
+    const res = await request(t.app).get(v1('/boom-async')).set('Authorization', authorization);
     expect(res.status).toBe(500);
     expect(Object.keys(res.body.error).sort()).toEqual(['code', 'message', 'requestId']);
     expectNoLeak(res.body);
@@ -26,7 +26,7 @@ describe('error responses never leak', () => {
   it('a thrown string or other non-Error value is handled and leaks nothing', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).get('/api/boom-string').set('Authorization', authorization);
+    const res = await request(t.app).get(v1('/boom-string')).set('Authorization', authorization);
     expect(res.status).toBe(500);
     expectNoLeak(res.body);
   });
@@ -34,7 +34,7 @@ describe('error responses never leak', () => {
   it('the full error goes to the server log, with the request id, so support can find it', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).get('/api/boom').set('Authorization', authorization);
+    const res = await request(t.app).get(v1('/boom')).set('Authorization', authorization);
     const entry = t.logs.find((log) => log.level === 'error');
     expect(entry?.fields.requestId).toBe(res.body.error.requestId);
     expect(JSON.stringify(entry?.fields)).toContain('password authentication failed');
@@ -44,7 +44,7 @@ describe('error responses never leak', () => {
   it('the log never contains the caller’s token', async () => {
     const t = await makeApp();
     const { authorization, token } = await t.login('seeker');
-    await request(t.app).get('/api/boom').set('Authorization', authorization);
+    await request(t.app).get(v1('/boom')).set('Authorization', authorization);
     expect(JSON.stringify(t.logs)).not.toContain(token);
   });
 
@@ -55,7 +55,7 @@ describe('error responses never leak', () => {
         process.env.NODE_ENV = nodeEnv;
         const t = await makeApp();
         const { authorization } = await t.login('seeker');
-        const res = await request(t.app).get('/api/boom').set('Authorization', authorization);
+        const res = await request(t.app).get(v1('/boom')).set('Authorization', authorization);
         expectNoLeak(res.body);
         expect(res.body.error.code).toBe('internal_error');
       }
@@ -67,7 +67,7 @@ describe('error responses never leak', () => {
   it('answers with JSON, never HTML, and never sets X-Powered-By', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).get('/api/boom').set('Authorization', authorization);
+    const res = await request(t.app).get(v1('/boom')).set('Authorization', authorization);
     expect(res.headers['content-type']).toMatch(/application\/json/);
     expect(res.headers['x-powered-by']).toBeUndefined();
   });
@@ -77,7 +77,7 @@ describe('expected errors get fixed, friendly messages', () => {
   it('an HttpError keeps its status, code and message', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).get('/api/http-error').set('Authorization', authorization);
+    const res = await request(t.app).get(v1('/http-error')).set('Authorization', authorization);
     expect(res.status).toBe(409);
     expect(res.body.error).toMatchObject({ code: 'already_applied', message: 'You already applied to this job.' });
     expect(t.logs.filter((log) => log.level === 'error')).toEqual([]);
@@ -87,7 +87,7 @@ describe('expected errors get fixed, friendly messages', () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker');
     const res = await request(t.app)
-      .post('/api/validate')
+      .post(v1('/validate'))
       .set('Authorization', authorization)
       .send({ title: 'abc', payMin: 'a-secret-looking-input-value', extra: 'unexpected' });
     expect(res.status).toBe(400);
@@ -101,7 +101,7 @@ describe('expected errors get fixed, friendly messages', () => {
 
   it('malformed JSON is 400 invalid_json without a parser stack trace', async () => {
     const t = await makeApp();
-    const res = await request(t.app).post('/api/echo').set('Content-Type', 'application/json').send('{"broken": ');
+    const res = await request(t.app).post(v1('/echo')).set('Content-Type', 'application/json').send('{"broken": ');
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('invalid_json');
     expectNoLeak(res.body, ['Unexpected', 'JSON at position', 'SyntaxError', 'body-parser']);
@@ -109,7 +109,7 @@ describe('expected errors get fixed, friendly messages', () => {
 
   it('a body over the limit is 413 payload_too_large', async () => {
     const t = await makeApp({ jsonLimit: '1kb' });
-    const res = await request(t.app).post('/api/echo').set('Content-Type', 'application/json').send({ big: 'x'.repeat(5000) });
+    const res = await request(t.app).post(v1('/echo')).set('Content-Type', 'application/json').send({ big: 'x'.repeat(5000) });
     expect(res.status).toBe(413);
     expect(res.body.error.code).toBe('payload_too_large');
     expectNoLeak(res.body);
@@ -123,10 +123,10 @@ describe('expected errors get fixed, friendly messages', () => {
     expect(res.headers['content-type']).toMatch(/application\/json/);
   });
 
-  it('an unknown route behind /api is 404 for a signed-in user (after authentication)', async () => {
+  it('an unknown route behind /api/v1 is 404 for a signed-in user (after authentication)', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).get('/api/nothing-here').set('Authorization', authorization);
+    const res = await request(t.app).get(v1('/nothing-here')).set('Authorization', authorization);
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe('not_found');
   });
@@ -135,7 +135,7 @@ describe('expected errors get fixed, friendly messages', () => {
 describe('request ids', () => {
   it('every response carries X-Request-Id, and errors repeat it in the body', async () => {
     const t = await makeApp();
-    const res = await request(t.app).get('/api/me');
+    const res = await request(t.app).get(v1('/me'));
     expect(res.headers['x-request-id']).toMatch(/^[0-9a-f-]{36}$/);
     expect(res.body.error.requestId).toBe(res.headers['x-request-id']);
   });

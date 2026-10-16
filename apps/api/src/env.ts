@@ -51,6 +51,8 @@ const rawSchema = z.object({
   TRUST_PROXY: z.coerce.number().int().min(0).max(10).default(0),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(15 * 60 * 1000),
   RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(300),
+  USER_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1000).default(15 * 60 * 1000),
+  USER_RATE_LIMIT_MAX: z.coerce.number().int().min(1).default(600),
 });
 
 export interface Config {
@@ -69,6 +71,7 @@ export interface Config {
   corsOrigins: string[];
   trustProxy: number;
   rateLimit: { windowMs: number; max: number };
+  userRateLimit: { windowMs: number; max: number };
 }
 
 const DEV_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000'];
@@ -115,5 +118,6 @@ export function parseEnv(source: Record<string, string | undefined>): Config {
     corsOrigins: env.CORS_ALLOWED_ORIGINS && env.CORS_ALLOWED_ORIGINS.length > 0 ? env.CORS_ALLOWED_ORIGINS : DEV_ORIGINS,
     trustProxy: env.TRUST_PROXY,
     rateLimit: { windowMs: env.RATE_LIMIT_WINDOW_MS, max: env.RATE_LIMIT_MAX },
+    userRateLimit: { windowMs: env.USER_RATE_LIMIT_WINDOW_MS, max: env.USER_RATE_LIMIT_MAX },
   };
 }

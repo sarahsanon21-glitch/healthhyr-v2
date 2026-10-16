@@ -68,7 +68,7 @@ describe('server boot', () => {
     expect(result.stdout).not.toContain('listening');
   }, 30_000);
 
-  it('starts with valid configuration, serves /health and refuses unauthenticated /api calls', async () => {
+  it('starts with valid configuration, serves /health, answers 401 on /api/v1/me and 404 on the old /api/me', async () => {
     let port = 0;
     const checks: Array<Promise<unknown>> = [];
     const result = await run(
@@ -90,8 +90,10 @@ describe('server boot', () => {
             const health = await fetch(`http://127.0.0.1:${port}/health`);
             expect(health.status).toBe(200);
             expect(await health.json()).toEqual({ status: 'ok' });
-            const me = await fetch(`http://127.0.0.1:${port}/api/me`);
+            const me = await fetch(`http://127.0.0.1:${port}/api/v1/me`);
             expect(me.status).toBe(401);
+            const oldMe = await fetch(`http://127.0.0.1:${port}/api/me`);
+            expect(oldMe.status).toBe(404);
             kill();
           })(),
         );

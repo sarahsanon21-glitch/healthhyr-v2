@@ -6,10 +6,11 @@ import { consoleLogger, type Logger } from './logger';
 import { authenticate } from './middleware/auth';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { requestId } from './middleware/requestId';
-import { corsAllowlist, rateLimiter, type RateLimitOptions } from './middleware/security';
+import { corsAllowlist, rateLimiter, userRateLimiter, type RateLimitOptions } from './middleware/security';
 import { healthRouter } from './routes/health';
-import { registerApiRoutes } from './routes';
-import { STRIPE_WEBHOOK_PATH, reservedStripeWebhook } from './routes/stripeWebhook';
+import { API_V1, STRIPE_WEBHOOK_PATH } from './routes/paths';
+import { reservedStripeWebhook } from './routes/stripeWebhook';
+import { registerV1Routes } from './routes/v1';
 
 /**
  * Everything the app needs, and nothing secret: no service-role key and no Stripe key come in here.
@@ -18,17 +19,22 @@ import { STRIPE_WEBHOOK_PATH, reservedStripeWebhook } from './routes/stripeWebho
 export interface AppOptions {
   corsOrigins: string[];
   trustProxy: number;
+  /** Per-IP limit, applied to everything except health and the Stripe webhook. */
   rateLimit: RateLimitOptions;
+  /** Per-user limit, applied to signed-in routes after authentication. */
+  userRateLimit?: RateLimitOptions;
   verifyToken: TokenVerifier;
   createUserClient: UserClientFactory;
   logger?: Logger;
   /** Replaces the reserved Stripe webhook handler. It receives the raw body as a Buffer. */
   stripeWebhook?: RequestHandler;
-  /** Extra signed-in routes, mounted under /api after authentication. Used by tests. */
+  /** Extra signed-in routes, mounted under /api/v1 after authentication. Used by tests. */
   registerRoutes?: (api: Router) => void;
   /** Max JSON body size. */
   jsonLimit?: string;
 }
+
+const DEFAULT_USER_LIMIT: RateLimitOptions = { windowMs: 15 * 60 * 1000, max: 600 };
 
 export function createApp(options: AppOptions): Express {
   const logger = options.logger ?? consoleLogger;
@@ -43,7 +49,7 @@ export function createApp(options: AppOptions): Express {
   // The Stripe webhook comes first, with a RAW body parser. Signature verification needs the exact
   // bytes Stripe sent, which the JSON parser below would destroy. It has no CORS check or
   // per-IP limit (Stripe is not a browser, and its calls must never be throttled away): the
-  // Stripe signature is its authentication.
+  // Stripe signature is its authentication. Its path is not versioned.
   app.post(STRIPE_WEBHOOK_PATH, express.raw({ type: 'application/json', limit: '1mb' }), options.stripeWebhook ?? reservedStripeWebhook);
 
   app.use(healthRouter);
@@ -53,10 +59,12 @@ export function createApp(options: AppOptions): Express {
 
   const api = Router();
   api.use(authenticate({ verifyToken: options.verifyToken, createUserClient: options.createUserClient }));
-  registerApiRoutes(api);
+  api.use(userRateLimiter(options.userRateLimit ?? DEFAULT_USER_LIMIT));
+  registerV1Routes(api);
   options.registerRoutes?.(api);
-  app.use('/api', api);
+  app.use(API_V1, api);
 
+  // Anything else, including the old unversioned /api/... paths, is a JSON 404.
   app.use(notFoundHandler);
   app.use(errorHandler(logger));
   return app;

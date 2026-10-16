@@ -1,11 +1,15 @@
 // A token issued by the REAL local Supabase (GoTrue), verified by OUR verifier against the real
 // published keys. This is what mock tokens cannot prove: that the issuer, audience and signing
 // algorithm we expect are the ones Supabase actually uses.
+//
+// Local Supabase requires email confirmation (as production must), so the test signs up, reads the
+// emailed 6-digit code from the mail catcher, and confirms it to get a session.
 import { randomUUID } from 'node:crypto';
 import { decodeProtectedHeader, decodeJwt } from 'jose';
 import pg from 'pg';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { clearMailFor, waitForCode } from '../../../../tests/support/mailpit';
 import { createApp } from '../../src/app';
 import { TokenError, createTokenVerifier, remoteKeys } from '../../src/auth/verifyToken';
 import { silentLogger } from '../../src/logger';
@@ -17,37 +21,59 @@ const issuer = `${url}/auth/v1`;
 const jwksUrl = `${issuer}/.well-known/jwks.json`;
 
 const db = new pg.Client({ connectionString: databaseUrl });
+const email = `api-integration-${randomUUID()}@example.test`;
 let accessToken = '';
 let userId = '';
+let signUpSessionWasNull = false;
 
 const verifier = createTokenVerifier({ keys: remoteKeys(jwksUrl), issuer, audience: 'authenticated' });
 
-async function signUp(): Promise<{ accessToken: string; userId: string }> {
-  const response = await fetch(`${url}/auth/v1/signup`, {
+const headers = { 'Content-Type': 'application/json', apikey: anonKey };
+
+async function signUpAndConfirm(): Promise<{ accessToken: string; userId: string }> {
+  const signUp = await fetch(`${url}/auth/v1/signup`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', apikey: anonKey },
+    headers,
     body: JSON.stringify({
-      email: `api-integration-${randomUUID()}@example.test`,
+      email,
       password: `Pw-${randomUUID()}`,
       data: { full_name: 'API Integration Test', role: 'admin' },
     }),
   });
-  const body = (await response.json()) as { access_token?: string; user?: { id: string }; msg?: string };
-  if (!response.ok || !body.access_token || !body.user) {
-    throw new Error(`signup failed (${response.status}): ${body.msg ?? 'no access token returned'}`);
+  const signUpBody = (await signUp.json()) as { access_token?: string; id?: string; msg?: string };
+  if (!signUp.ok) throw new Error(`signup failed (${signUp.status}): ${signUpBody.msg ?? 'unknown'}`);
+  signUpSessionWasNull = !signUpBody.access_token;
+
+  const code = await waitForCode(email, { subjectIncludes: 'confirmation' });
+  const verify = await fetch(`${url}/auth/v1/verify`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ type: 'signup', email, token: code }),
+  });
+  const verified = (await verify.json()) as { access_token?: string; user?: { id: string }; msg?: string };
+  if (!verify.ok || !verified.access_token || !verified.user) {
+    throw new Error(`code confirmation failed (${verify.status}): ${verified.msg ?? 'no access token returned'}`);
   }
-  return { accessToken: body.access_token, userId: body.user.id };
+  return { accessToken: verified.access_token, userId: verified.user.id };
 }
 
 beforeAll(async () => {
   await db.connect();
-  ({ accessToken, userId } = await signUp());
+  await clearMailFor(email);
+  ({ accessToken, userId } = await signUpAndConfirm());
 });
 
 afterAll(async () => {
   // Deleting the auth user cascades to the profile and everything under it.
   if (userId) await db.query('delete from auth.users where id = $1', [userId]);
+  await clearMailFor(email);
   await db.end();
+});
+
+describe('local Supabase requires email confirmation', () => {
+  it('sign-up alone gives no session; the emailed code is needed', () => {
+    expect(signUpSessionWasNull).toBe(true);
+  });
 });
 
 describe('a real Supabase access token', () => {
@@ -105,6 +131,7 @@ describe('the real token through the whole app', () => {
       corsOrigins: ['http://localhost:3000'],
       trustProxy: 0,
       rateLimit: { windowMs: 60_000, max: 1000 },
+      userRateLimit: { windowMs: 60_000, max: 1000 },
       verifyToken: verifier,
       logger: silentLogger,
       createUserClient: () =>
@@ -127,14 +154,14 @@ describe('the real token through the whole app', () => {
     expect(await profileRole()).toBe('seeker');
   });
 
-  it('GET /api/me with the real token returns the database role, not anything the token or signup said', async () => {
-    const res = await request(appWithRealVerifier()).get('/api/me').set('Authorization', `Bearer ${accessToken}`);
+  it('GET /api/v1/me with the real token returns the database role, not anything the token or signup said', async () => {
+    const res = await request(appWithRealVerifier()).get('/api/v1/me').set('Authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ id: userId, role: 'seeker' });
   });
 
-  it('the same app refuses a request with no token', async () => {
-    const res = await request(appWithRealVerifier()).get('/api/me');
-    expect(res.status).toBe(401);
+  it('the same app refuses a request with no token, and the old /api/me path does not exist', async () => {
+    expect((await request(appWithRealVerifier()).get('/api/v1/me')).status).toBe(401);
+    expect((await request(appWithRealVerifier()).get('/api/me').set('Authorization', `Bearer ${accessToken}`)).status).toBe(404);
   });
 });

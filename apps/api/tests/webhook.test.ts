@@ -1,8 +1,8 @@
 import type { RequestHandler } from 'express';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { STRIPE_WEBHOOK_PATH } from '../src/routes/stripeWebhook';
-import { expectNoLeak, makeApp } from './helpers/harness';
+import { STRIPE_WEBHOOK_PATH } from '../src/routes/paths';
+import { expectNoLeak, makeApp, v1 } from './helpers/harness';
 
 function capture() {
   const seen: Array<{ body: unknown; contentType: string | undefined }> = [];
@@ -14,8 +14,17 @@ function capture() {
 }
 
 describe('Stripe webhook route', () => {
-  it('lives at /api/webhooks/stripe', () => {
+  it('keeps its unversioned path, /api/webhooks/stripe (Stripe is configured with the URL)', () => {
     expect(STRIPE_WEBHOOK_PATH).toBe('/api/webhooks/stripe');
+    expect(STRIPE_WEBHOOK_PATH).not.toContain('/v1');
+  });
+
+  it('is not reachable under the versioned prefix', async () => {
+    const { seen, handler } = capture();
+    const t = await makeApp({ stripeWebhook: handler });
+    const res = await request(t.app).post(v1('/webhooks/stripe')).set('Content-Type', 'application/json').send('{}');
+    expect(res.status).toBe(401);
+    expect(seen).toHaveLength(0);
   });
 
   it('receives the RAW body, byte for byte, not parsed JSON', async () => {
@@ -41,7 +50,7 @@ describe('Stripe webhook route', () => {
   it('contrast: every other route gets a parsed object, so the raw route really is mounted first', async () => {
     const t = await makeApp();
     const { authorization } = await t.login('seeker');
-    const res = await request(t.app).post('/api/echo').set('Authorization', authorization).send({ a: 1 });
+    const res = await request(t.app).post(v1('/echo')).set('Authorization', authorization).send({ a: 1 });
     expect(res.body.received).toEqual({ a: 1 });
   });
 
@@ -72,11 +81,11 @@ describe('Stripe webhook route', () => {
     expect(seen).toHaveLength(1);
   });
 
-  it('only handles POST: a GET does not reach the handler and still needs a token', async () => {
+  it('only handles POST: a GET does not reach the handler', async () => {
     const { seen, handler } = capture();
     const t = await makeApp({ stripeWebhook: handler });
     const res = await request(t.app).get(STRIPE_WEBHOOK_PATH);
-    expect(res.status).toBe(401);
+    expect(res.status).toBe(404);
     expect(seen).toHaveLength(0);
   });
 

@@ -1,9 +1,9 @@
 # Local Supabase for HealthHyr v2.
 # Reference: https://supabase.com/docs/guides/local-development/cli/config
 #
-# Only the database and Auth run locally for now: the RLS tests need the real auth schema and
-# roles, and nothing else. Turn on [storage] (resume uploads), [api] and [studio] when a later
-# step needs them. They pull extra Docker images when enabled.
+# Only the database and Auth run locally for now, plus a mail catcher so emailed codes can be read
+# in tests. Turn on [storage] (resume uploads), [api] and [studio] when a later step needs them.
+# They pull extra Docker images when enabled.
 # Local keys are printed by `npm run db:status`. Keep them in git-ignored .env files only.
 
 project_id = "healthhyr-v2"
@@ -38,8 +38,11 @@ enabled = false
 enabled = false
 port = 54323
 
+# The mail catcher (Mailpit). Every email Auth sends lands here instead of the internet.
+# Inbox: http://127.0.0.1:54324. Tests read emailed codes from its API.
 [local_smtp]
-enabled = false
+enabled = true
+port = 54324
 
 [storage]
 enabled = false
@@ -59,7 +62,21 @@ minimum_password_length = 8
 [auth.email]
 enable_signup = true
 double_confirm_changes = true
-enable_confirmations = false
+# Same as production must be: nobody gets an account for an address they cannot read.
+enable_confirmations = true
+max_frequency = "1s"
+# Emailed codes: 6 digits, valid for 15 minutes.
+otp_length = 6
+otp_expiry = 900
+
+# The emails show a 6-digit code, not a link, so the same flow works on the website and in the app.
+[auth.email.template.confirmation]
+subject = "Your HealthHyr confirmation code"
+content_path = "./supabase/templates/confirmation.html"
+
+[auth.email.template.recovery]
+subject = "Your HealthHyr password reset code"
+content_path = "./supabase/templates/recovery.html"
 
 [edge_runtime]
 enabled = false

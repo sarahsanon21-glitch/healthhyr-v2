@@ -27,6 +27,7 @@ const app = createApp({
   corsOrigins: config.corsOrigins,
   trustProxy: config.trustProxy,
   rateLimit: config.rateLimit,
+  userRateLimit: config.userRateLimit,
   verifyToken: createTokenVerifier({
     keys: remoteKeys(config.supabase.jwksUrl),
     issuer: config.supabase.issuer,

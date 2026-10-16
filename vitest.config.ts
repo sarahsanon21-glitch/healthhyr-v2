@@ -25,7 +25,8 @@ export default defineConfig({
         },
       },
       {
-        // Real GoTrue tokens against the real local Supabase. Needs SUPABASE_URL and SUPABASE_ANON_KEY in .env.
+        // Real GoTrue, mail catcher and API app against the real local Supabase: the API's token
+        // checks and the website's auth flows. Needs SUPABASE_URL and SUPABASE_ANON_KEY in .env.
         test: {
           name: 'api-integration',
           environment: 'node',

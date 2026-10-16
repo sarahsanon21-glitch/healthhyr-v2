@@ -8,8 +8,8 @@ export interface EmptyStateProps {
   action?: ReactNode;
   /** A decorative icon. Hidden from assistive tech. */
   icon?: ReactNode;
-  /** The heading level, so the page outline stays correct. */
-  headingLevel?: 2 | 3 | 4;
+  /** The heading level, so the page outline stays correct. Use 1 when it is the whole page. */
+  headingLevel?: 1 | 2 | 3 | 4;
   className?: string;
 }
 

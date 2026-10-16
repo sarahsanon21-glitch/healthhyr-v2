@@ -42,6 +42,7 @@ describe('parseEnv: a valid configuration', () => {
     expect(config.corsOrigins).toEqual(['http://localhost:3000', 'http://127.0.0.1:3000']);
     expect(config.trustProxy).toBe(0);
     expect(config.rateLimit).toEqual({ windowMs: 900_000, max: 300 });
+    expect(config.userRateLimit).toEqual({ windowMs: 900_000, max: 600 });
   });
 
   it('honors explicit values', () => {
@@ -53,6 +54,8 @@ describe('parseEnv: a valid configuration', () => {
         CORS_ALLOWED_ORIGINS: 'https://a.example.test, https://b.example.test',
         TRUST_PROXY: '1',
         RATE_LIMIT_MAX: '50',
+        USER_RATE_LIMIT_MAX: '20',
+        USER_RATE_LIMIT_WINDOW_MS: '60000',
       }),
     );
     expect(config.port).toBe(8080);
@@ -61,6 +64,7 @@ describe('parseEnv: a valid configuration', () => {
     expect(config.corsOrigins).toEqual(['https://a.example.test', 'https://b.example.test']);
     expect(config.trustProxy).toBe(1);
     expect(config.rateLimit.max).toBe(50);
+    expect(config.userRateLimit).toEqual({ windowMs: 60_000, max: 20 });
   });
 
   it('treats an empty value like a missing one', () => {
@@ -94,6 +98,8 @@ describe('parseEnv: fails fast and names every problem', () => {
       ['PORT', { PORT: '70000' }],
       ['NODE_ENV', { NODE_ENV: 'staging' }],
       ['RATE_LIMIT_MAX', { RATE_LIMIT_MAX: '0' }],
+      ['USER_RATE_LIMIT_MAX', { USER_RATE_LIMIT_MAX: '0' }],
+      ['USER_RATE_LIMIT_WINDOW_MS', { USER_RATE_LIMIT_WINDOW_MS: '10' }],
       ['TRUST_PROXY', { TRUST_PROXY: '-1' }],
       ['CORS_ALLOWED_ORIGINS', { CORS_ALLOWED_ORIGINS: '*' }],
       ['CORS_ALLOWED_ORIGINS', { CORS_ALLOWED_ORIGINS: 'https://app.example.test/path' }],
