@@ -12,14 +12,24 @@
   ],
   "scripts": {
     "test": "vitest run",
+    "test:fast": "vitest run --project node --project web-components",
+    "test:rls": "vitest run --project rls",
+    "test:rls:mutation": "node supabase/tests/mutation.mjs",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present"
+    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspaces --if-present",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:reset": "supabase db reset",
+    "db:status": "supabase status"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
     "eslint": "^10.12.0",
+    "pg": "^8.23.1",
+    "supabase": "^2.121.0",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.71.2",
     "vitest": "^5.0.5"
