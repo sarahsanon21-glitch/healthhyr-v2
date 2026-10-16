@@ -1,0 +1,29 @@
+/* The default Tailwind theme (palette, spacing, type scale) is deliberately not imported.
+   The theme comes from packages/shared/src/tokens.ts through tailwind.config.ts. */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/preflight.css' layer(base);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@config '../../tailwind.config.ts';
+
+@layer base {
+  html {
+    @apply bg-paper font-body text-base text-ink antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-heading;
+  }
+
+  a {
+    @apply text-primary;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-primary;
+  }
+}

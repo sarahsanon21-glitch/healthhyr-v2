@@ -14,6 +14,7 @@ build/
 out/
 coverage/
 *.tsbuildinfo
+next-env.d.ts
 
 # Tooling
 .turbo/
