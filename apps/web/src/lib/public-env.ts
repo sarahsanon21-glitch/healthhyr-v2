@@ -89,3 +89,29 @@ export function parseSiteUrl(value: string | undefined): string {
 export function readSiteUrl(): string {
   return parseSiteUrl(process.env.NEXT_PUBLIC_SITE_URL);
 }
+
+/**
+ * The origins the browser may call (the HealthHyr API and Supabase Auth), for the page's
+ * Content-Security-Policy. A value that is missing or malformed is left out here rather than
+ * stopping the page: the sign-in code reports that problem itself, and a missing origin only
+ * means the browser would refuse that call.
+ */
+export function parseConnectOrigins(values: Array<string | undefined>): string[] {
+  const origins: string[] = [];
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed || !isHttpUrl(trimmed)) continue;
+    const origin = new URL(trimmed).origin;
+    if (!origins.includes(origin)) origins.push(origin);
+  }
+  return origins;
+}
+
+export function readConnectOrigins(): string[] {
+  return parseConnectOrigins([process.env.NEXT_PUBLIC_API_BASE_URL, process.env.NEXT_PUBLIC_SUPABASE_URL]);
+}
+
+/** True when running `next dev`. The policy is looser there (hot reload needs it), never in production. */
+export function isDevelopment(): boolean {
+  return process.env.NODE_ENV === 'development';
+}

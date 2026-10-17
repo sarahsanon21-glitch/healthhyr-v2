@@ -21,6 +21,8 @@ apps/web/          The website (Next.js App Router, Tailwind from the tokens).
                      Employer pages: /dashboard, /dashboard/jobs/new, /dashboard/jobs/[id], /company. (/jobs is kept for the public job pages.)
   src/components/ui/ Base components. No business logic, no data fetching.
   src/components/auth, account, company, jobs/   Feature components: sign-in, the signed-in frame, the company form and page, the dashboard, job form and job editor.
+  src/proxy.ts                    Runs before every page: makes the nonce and sets the Content-Security-Policy (Next.js 16's name for middleware).
+  src/lib/security/               csp.ts (builds the policy), headers.ts (the six headers that are the same on every response; next.config.ts applies them).
   src/lib/public-env.ts           The only file that reads the environment (public values only).
   src/lib/api/client.ts           The only file that calls fetch. The signed-in client (sends the person's token) and the public client (sends none).
   src/lib/api/public.ts           Server-side calls for public pages; builds the public client from the environment.
@@ -131,6 +133,7 @@ What follows from this:
 | Add a form | `apps/web/src/components/…`, a schema in `packages/shared/src/schemas/`, the same schema in the API route |
 | Add a color, size or font | `packages/shared/src/tokens.ts` only |
 | Understand sign-in | `docs/PLAN.md` section 6.2, then `apps/web/src/lib/auth/` |
+| Understand the security headers and CSP | `docs/PLAN.md` section 6.5, then `apps/web/src/proxy.ts` and `apps/web/src/lib/security/`. Pages may not use inline `style` attributes, and a new `NEXT_PUBLIC_` address the browser calls must be added to `connect-src` (it is read from `public-env.ts`) |
 | Understand the company profile and public page | `docs/PLAN.md` section 6.3 |
 | Understand jobs and the database constraints | `docs/PLAN.md` section 6.4 and 5.6 |
 | Run things locally | `docs/PLAN.md` section 13 |

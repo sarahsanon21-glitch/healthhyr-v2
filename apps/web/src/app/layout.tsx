@@ -21,6 +21,12 @@ const body = DM_Sans({
   display: 'swap',
 });
 
+// Every page is rendered for each request, never built ahead of time. The Content-Security-Policy
+// carries a fresh nonce for each request (src/proxy.ts), and Next.js can only attach it to scripts
+// while it renders the page for that request. A page built ahead of time would have scripts the
+// browser refuses to run.
+export const dynamic = 'force-dynamic';
+
 // The icons (icon.png, favicon.ico, apple-icon.png) and the share images (opengraph-image.png,
 // twitter-image.png) sit next to this file. Next.js adds them to every page's metadata by their
 // file names; metadataBase turns their addresses into absolute ones, as share previews require.
