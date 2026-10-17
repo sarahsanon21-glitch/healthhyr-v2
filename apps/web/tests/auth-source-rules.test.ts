@@ -84,8 +84,13 @@ describe('the web app holds no server secret', () => {
     expect(using(/SERVICE_ROLE|SUPABASE_SECRET|STRIPE_/)).toEqual([]);
   });
 
-  it('the only environment variables the site reads are the three public ones', () => {
+  it('the only environment variables the site reads are the four public ones', () => {
     const names = [...new Set(files.flatMap((f) => f.text.match(/NEXT_PUBLIC_[A-Z_]{3,}/g) ?? []))].sort();
-    expect(names).toEqual(['NEXT_PUBLIC_API_BASE_URL', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY', 'NEXT_PUBLIC_SUPABASE_URL']);
+    expect(names).toEqual([
+      'NEXT_PUBLIC_API_BASE_URL',
+      'NEXT_PUBLIC_SITE_URL',
+      'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
+      'NEXT_PUBLIC_SUPABASE_URL',
+    ]);
   });
 });

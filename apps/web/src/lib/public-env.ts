@@ -70,3 +70,22 @@ export function readPublicEnv(): PublicEnv {
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
   });
 }
+
+/** Used when NEXT_PUBLIC_SITE_URL is not set (local development). Production must set it. */
+export const DEFAULT_SITE_URL = 'http://localhost:3000';
+
+/**
+ * The public address of the site, as an origin ("https://healthhyr.com"). It is the base for the
+ * absolute addresses in the page metadata (share images, canonical links later). Optional: it does
+ * not stop the site from starting, because nothing about signing in depends on it.
+ */
+export function parseSiteUrl(value: string | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return DEFAULT_SITE_URL;
+  if (!isHttpUrl(trimmed)) throw new PublicEnvError(['NEXT_PUBLIC_SITE_URL must be an http(s) URL']);
+  return new URL(trimmed).origin;
+}
+
+export function readSiteUrl(): string {
+  return parseSiteUrl(process.env.NEXT_PUBLIC_SITE_URL);
+}

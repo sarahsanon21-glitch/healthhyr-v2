@@ -2,7 +2,6 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { Badge, type BadgeVariant } from '../../src/components/ui/Badge';
 import { Card } from '../../src/components/ui/Card';
-import { Logo } from '../../src/components/ui/Logo';
 import { expectAllowedTextPair } from '../helpers/contrast';
 import { expectClassesGenerated } from '../helpers/tailwind';
 
@@ -74,34 +73,5 @@ describe('Card', () => {
       </Card>,
     );
     expect(screen.getByTestId('card')).not.toHaveClass('p-6');
-  });
-});
-
-describe('Logo', () => {
-  it('spells HealthHyr with Hyr in olive', () => {
-    const { container } = render(<Logo />);
-    expect(container).toHaveTextContent('HealthHyr');
-    expect(container.querySelector('.text-olive')).toHaveTextContent('Hyr');
-  });
-
-  it('is never smaller than 24px, because olive is for large text only', async () => {
-    const { container } = render(
-      <>
-        <Logo />
-        <Logo size="3xl" />
-        <Logo size="4xl" />
-      </>,
-    );
-    const roots = [...container.children];
-    expect(roots[0]).toHaveClass('text-2xl');
-    expect(roots[1]).toHaveClass('text-3xl');
-    expect(roots[2]).toHaveClass('text-4xl');
-    for (const root of roots) expect(root.className).toMatch(/\btext-(2xl|3xl|4xl)\b/);
-    await expectClassesGenerated();
-  });
-
-  it('uses the heading font in ink for the rest of the word', () => {
-    const { container } = render(<Logo />);
-    expect(container.firstElementChild).toHaveClass('font-heading', 'font-extrabold', 'text-ink');
   });
 });

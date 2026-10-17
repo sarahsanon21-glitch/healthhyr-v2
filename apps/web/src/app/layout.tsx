@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { DM_Sans, Manrope } from 'next/font/google';
 import type { ReactNode } from 'react';
 import { AuthProvider } from '../lib/auth/AuthProvider';
+import { readSiteUrl } from '../lib/public-env';
 import './globals.css';
 
 // Font families, weights and CSS variables must match fonts in packages/shared/src/tokens.ts.
@@ -20,9 +21,15 @@ const body = DM_Sans({
   display: 'swap',
 });
 
+// The icons (icon.png, favicon.ico, apple-icon.png) and the share images (opengraph-image.png,
+// twitter-image.png) sit next to this file. Next.js adds them to every page's metadata by their
+// file names; metadataBase turns their addresses into absolute ones, as share previews require.
 export const metadata: Metadata = {
+  metadataBase: new URL(readSiteUrl()),
   title: { default: 'HealthHyr', template: '%s | HealthHyr' },
   description: 'Healthcare jobs for PCAs, HHAs, CNAs, RNs and caregivers.',
+  openGraph: { siteName: 'HealthHyr', type: 'website' },
+  twitter: { card: 'summary_large_image' },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

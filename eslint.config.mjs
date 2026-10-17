@@ -17,7 +17,7 @@ export default defineConfig(
     // Plain Node scripts (not TypeScript, so no-undef applies).
     files: ['**/*.mjs'],
     languageOptions: {
-      globals: { process: 'readonly', console: 'readonly' },
+      globals: { process: 'readonly', console: 'readonly', Buffer: 'readonly' },
     },
   },
 );

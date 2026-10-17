@@ -23,6 +23,9 @@ const COMPANY: PublicCompany = {
   state: 'CA',
 };
 
+/** The only image on the page is the site's own logo in the header. A company's logo is never shown yet. */
+const imageSources = () => [...document.querySelectorAll('img')].map((image) => image.getAttribute('src'));
+
 describe('the public company page: what it shows', () => {
   it('shows the company name as the page heading, and what the company shared', async () => {
     render(<PublicCompanyView company={COMPANY} />);
@@ -65,7 +68,7 @@ describe('the public company page: what it shows', () => {
   it('text from the company is shown as plain text, never as markup', () => {
     render(<PublicCompanyView company={{ ...COMPANY, companyName: '<img src=x onerror=alert(1)>', description: '<script>alert(1)</script>' }} />);
     expect(document.querySelector('script')).toBeNull();
-    expect(document.querySelector('img')).toBeNull();
+    expect(imageSources()).toEqual(['/brand/healthhyr-logo-compact.png']); // no image made from the company's text
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('<img src=x onerror=alert(1)>');
   });
 
@@ -75,9 +78,9 @@ describe('the public company page: what it shows', () => {
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('does not show a logo yet, even if one is set', () => {
+  it('does not show a company logo yet, even if one is set', () => {
     render(<PublicCompanyView company={{ ...COMPANY, logoUrl: 'https://tracker.example.org/pixel.png' }} />);
-    expect(document.querySelector('img')).toBeNull();
+    expect(imageSources()).toEqual(['/brand/healthhyr-logo-compact.png']);
     expect(document.body.innerHTML).not.toContain('tracker.example.org');
   });
 });

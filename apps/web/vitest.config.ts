@@ -9,5 +9,8 @@ export default defineConfig({
     environment: 'jsdom',
     include: ['tests/**/*.test.tsx'],
     setupFiles: ['./tests/setup.ts'],
+    // Some tests compile the Tailwind theme to check every class is real. That is slow while the
+    // machine is busy (for example, while Docker starts), so the limit is generous.
+    testTimeout: 20_000,
   },
 });
